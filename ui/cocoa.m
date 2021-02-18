@@ -579,7 +579,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 {
     /* Must be called with the iothread lock, i.e. via updateUIInfo */
     NSSize frameSize;
-    QemuUIInfo info;
+    QemuUIInfo info = {};
 
     if (!qemu_console_is_graphic(dcl.con)) {
         return;
@@ -596,12 +596,8 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
         info.height_mm = frameSize.height / screenSize.height * screenPhysicalSize.height;
     } else {
         frameSize = [self frame].size;
-        info.width_mm = 0;
-        info.height_mm = 0;
     }
 
-    info.xoff = 0;
-    info.yoff = 0;
     info.width = frameSize.width;
     info.height = frameSize.height;
 
