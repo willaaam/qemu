@@ -323,6 +323,7 @@ pie=""
 trace_backends="log"
 trace_file="trace"
 opengl="$default_feature"
+egl="no"
 coroutine=""
 tls_priority="NORMAL"
 plugins="$default_feature"
@@ -2287,18 +2288,7 @@ esac
 # opengl probe (for sdl2, gtk)
 
 if test "$opengl" != "no" ; then
-  epoxy=no
   if $pkg_config epoxy; then
-    cat > $TMPC << EOF
-#include <epoxy/egl.h>
-int main(void) { return 0; }
-EOF
-    if compile_prog "" "" ; then
-      epoxy=yes
-    fi
-  fi
-
-  if test "$epoxy" = "yes" ; then
     opengl_cflags="$($pkg_config --cflags epoxy)"
     opengl_libs="$($pkg_config --libs epoxy)"
     opengl=yes
@@ -2309,6 +2299,16 @@ EOF
     opengl_cflags=""
     opengl_libs=""
     opengl=no
+  fi
+fi
+
+if test "$opengl" = "yes"; then
+  cat > $TMPC << EOF
+#include <epoxy/egl.h>
+int main(void) { return 0; }
+EOF
+  if compile_prog "$opengl_cflags" "$opengl_libs" ; then
+    egl=yes
   fi
 fi
 
@@ -2942,6 +2942,9 @@ if test "$opengl" = "yes" ; then
   echo "CONFIG_OPENGL=y" >> $config_host_mak
   echo "OPENGL_CFLAGS=$opengl_cflags" >> $config_host_mak
   echo "OPENGL_LIBS=$opengl_libs" >> $config_host_mak
+  if test "$egl" = "yes" ; then
+    echo "CONFIG_EGL=y" >> $config_host_mak
+  fi
 fi
 
 # XXX: suppress that
