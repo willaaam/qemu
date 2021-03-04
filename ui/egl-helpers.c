@@ -317,6 +317,31 @@ EGLSurface qemu_egl_init_surface(EGLContext ectx, EGLNativeWindowType win)
 
 static int qemu_egl_init_dpy(EGLDisplay dpy, DisplayGLMode mode)
 {
+    EGLint major, minor;
+    EGLBoolean b;
+    bool gles = (mode == DISPLAYGL_MODE_ES);
+
+    qemu_egl_display = dpy;
+
+    b = eglInitialize(qemu_egl_display, &major, &minor);
+    if (b == EGL_FALSE) {
+        error_report("egl: eglInitialize failed");
+        return -1;
+    }
+
+    b = eglBindAPI(gles ?  EGL_OPENGL_ES_API : EGL_OPENGL_API);
+    if (b == EGL_FALSE) {
+        error_report("egl: eglBindAPI failed (%s mode)",
+                     gles ? "gles" : "core");
+        return -1;
+    }
+
+    qemu_egl_mode = gles ? DISPLAYGL_MODE_ES : DISPLAYGL_MODE_CORE;
+    return 0;
+}
+
+static int qemu_egl_config_dpy()
+{
     static const EGLint conf_att_core[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
@@ -335,25 +360,9 @@ static int qemu_egl_init_dpy(EGLDisplay dpy, DisplayGLMode mode)
         EGL_ALPHA_SIZE, 0,
         EGL_NONE,
     };
-    EGLint major, minor;
     EGLBoolean b;
     EGLint n;
-    bool gles = (mode == DISPLAYGL_MODE_ES);
-
-    qemu_egl_display = dpy;
-
-    b = eglInitialize(qemu_egl_display, &major, &minor);
-    if (b == EGL_FALSE) {
-        error_report("egl: eglInitialize failed");
-        return -1;
-    }
-
-    b = eglBindAPI(gles ?  EGL_OPENGL_ES_API : EGL_OPENGL_API);
-    if (b == EGL_FALSE) {
-        error_report("egl: eglBindAPI failed (%s mode)",
-                     gles ? "gles" : "core");
-        return -1;
-    }
+    bool gles = (qemu_egl_mode == DISPLAYGL_MODE_ES);
 
     b = eglChooseConfig(qemu_egl_display,
                         gles ? conf_att_gles : conf_att_core,
@@ -364,22 +373,26 @@ static int qemu_egl_init_dpy(EGLDisplay dpy, DisplayGLMode mode)
         return -1;
     }
 
-    qemu_egl_mode = gles ? DISPLAYGL_MODE_ES : DISPLAYGL_MODE_CORE;
     return 0;
 }
 
 int qemu_egl_init_dpy_cocoa(DisplayGLMode mode)
 {
+    int result;
+
     EGLDisplay dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (dpy == EGL_NO_DISPLAY) {
         error_report("egl: eglGetDisplay failed");
         return -1;
     }
 
-    return qemu_egl_init_dpy(dpy, mode);
-}
+    result = qemu_egl_init_dpy(dpy, mode);
+    if (!result) {
+        result = qemu_egl_config_dpy();
+    }
 
-#if defined(CONFIG_X11) || defined(CONFIG_GBM)
+    return result;
+}
 
 /*
  * Taken from glamor_egl.h from the Xorg xserver, which is MIT licensed
@@ -409,7 +422,7 @@ int qemu_egl_init_dpy_cocoa(DisplayGLMode mode)
  * platform extensions (EGL_KHR_platform_gbm and friends) yet it doesn't seem
  * like mesa will be able to advertise these (even though it can do EGL 1.5).
  */
-static int qemu_egl_init_dpy_platform(EGLNativeDisplayType native,
+static int qemu_egl_init_dpy_platform(void *native,
                                       EGLenum platform,
                                       DisplayGLMode mode)
 {
@@ -424,10 +437,12 @@ static int qemu_egl_init_dpy_platform(EGLNativeDisplayType native,
         }
     }
 
+#if defined(CONFIG_X11) || defined(CONFIG_GBM)
     if (dpy == EGL_NO_DISPLAY) {
         /* fallback */
         dpy = eglGetDisplay(native);
     }
+#endif
 
     if (dpy == EGL_NO_DISPLAY) {
         error_report("egl: eglGetDisplay failed");
@@ -437,22 +452,43 @@ static int qemu_egl_init_dpy_platform(EGLNativeDisplayType native,
     return qemu_egl_init_dpy(dpy, mode);
 }
 
+int qemu_egl_init_dpy_surfaceless(DisplayGLMode mode)
+{
+    return qemu_egl_init_dpy_platform(NULL, EGL_PLATFORM_SURFACELESS_MESA, mode);
+}
+
+#if defined(CONFIG_X11) || defined(CONFIG_GBM)
+
 int qemu_egl_init_dpy_x11(EGLNativeDisplayType dpy, DisplayGLMode mode)
 {
+    int result;
+
 #ifdef EGL_KHR_platform_x11
-    return qemu_egl_init_dpy_platform(dpy, EGL_PLATFORM_X11_KHR, mode);
+    result = qemu_egl_init_dpy_platform(dpy, EGL_PLATFORM_X11_KHR, mode);
 #else
-    return qemu_egl_init_dpy_platform(dpy, 0, mode);
+    result = qemu_egl_init_dpy_platform(dpy, 0, mode);
 #endif
+    if (!result) {
+        result = qemu_egl_config_dpy();
+    }
+
+    return result;
 }
 
 int qemu_egl_init_dpy_mesa(EGLNativeDisplayType dpy, DisplayGLMode mode)
 {
+    int result;
+
 #ifdef EGL_MESA_platform_gbm
-    return qemu_egl_init_dpy_platform(dpy, EGL_PLATFORM_GBM_MESA, mode);
+    result = qemu_egl_init_dpy_platform(dpy, EGL_PLATFORM_GBM_MESA, mode);
 #else
-    return qemu_egl_init_dpy_platform(dpy, 0, mode);
+    result = qemu_egl_init_dpy_platform(dpy, 0, mode);
 #endif
+    if (!result) {
+        result = qemu_egl_config_dpy();
+    }
+
+    return result;
 }
 
 #endif

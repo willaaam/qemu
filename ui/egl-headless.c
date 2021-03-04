@@ -18,6 +18,10 @@ typedef struct egl_dpy {
     uint32_t pos_y;
 } egl_dpy;
 
+#ifndef CONFIG_GBM
+static EGLContext ctx;
+#endif
+
 /* ------------------------------------------------------------------ */
 
 static void egl_refresh(DisplayChangeListener *dcl)
@@ -41,8 +45,12 @@ static void egl_gfx_switch(DisplayChangeListener *dcl,
 static QEMUGLContext egl_create_context(void *dg,
                                         QEMUGLParams *params)
 {
+#ifdef CONFIG_GBM
     eglMakeCurrent(qemu_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
                    qemu_egl_rn_ctx);
+#else
+    eglMakeCurrent(qemu_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx);
+#endif
     return qemu_egl_create_context(dg, params);
 }
 
@@ -98,6 +106,7 @@ static void egl_scanout_texture(void *dg,
     }
 }
 
+#ifdef CONFIG_GBM
 static void egl_scanout_dmabuf(void *dg, QemuDmaBuf *dmabuf)
 {
     egl_dmabuf_import_texture(dmabuf);
@@ -140,6 +149,7 @@ static void egl_release_dmabuf(void *dg, QemuDmaBuf *dmabuf)
 {
     egl_dmabuf_release_texture(dmabuf);
 }
+#endif
 
 static void egl_scanout_flush(DisplayChangeListener *dcl,
                               uint32_t x, uint32_t y,
@@ -176,10 +186,12 @@ static const DisplayGLOps dg_egl_ops = {
     .dpy_gl_scanout_get_enabled = egl_scanout_get_enabled,
     .dpy_gl_scanout_disable     = egl_scanout_disable,
     .dpy_gl_scanout_texture     = egl_scanout_texture,
+#ifdef CONFIG_GBM
     .dpy_gl_scanout_dmabuf      = egl_scanout_dmabuf,
     .dpy_gl_cursor_dmabuf       = egl_cursor_dmabuf,
     .dpy_gl_cursor_position     = egl_cursor_position,
     .dpy_gl_release_dmabuf      = egl_release_dmabuf,
+#endif
 };
 
 static const DisplayChangeListenerOps dcl_egl_ops = {
@@ -203,10 +215,23 @@ static void egl_headless_init(DisplayState *ds, DisplayOptions *opts)
     egl_dpy *edpy;
     int idx;
 
+#ifdef CONFIG_GBM
     if (egl_rendernode_init(opts->u.egl_headless.rendernode, mode) < 0) {
         error_report("egl: render node init failed");
         exit(1);
     }
+#else
+    if (qemu_egl_init_dpy_surfaceless(mode)) {
+        error_report("egl: display init failed");
+        exit(1);
+    }
+
+    ctx = qemu_egl_init_ctx();
+    if (!ctx) {
+        error_report("egl: egl_init_ctx failed");
+        exit(1);
+    }
+#endif
 
     register_displayglops(&dg_egl_ops);
 

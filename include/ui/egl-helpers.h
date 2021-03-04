@@ -51,6 +51,7 @@ void egl_dmabuf_release_texture(QemuDmaBuf *dmabuf);
 EGLSurface qemu_egl_init_surface(EGLContext ectx, EGLNativeWindowType win);
 
 int qemu_egl_init_dpy_cocoa(DisplayGLMode mode);
+int qemu_egl_init_dpy_surfaceless(DisplayGLMode mode);
 
 #if defined(CONFIG_X11) || defined(CONFIG_GBM)
 

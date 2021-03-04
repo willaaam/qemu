@@ -59,9 +59,9 @@ if config_host.has_key('CONFIG_OPENGL')
   ui_modules += {'opengl' : opengl_ss}
 endif
 
-if config_host.has_key('CONFIG_OPENGL') and gbm.found()
+if config_host.has_key('CONFIG_OPENGL')
   egl_headless_ss = ss.source_set()
-  egl_headless_ss.add(when: [opengl, gbm, pixman, 'CONFIG_OPENGL', 'CONFIG_EGL'],
+  egl_headless_ss.add(when: [opengl, pixman, 'CONFIG_OPENGL', 'CONFIG_EGL'],
                       if_true: files('egl-headless.c'))
   ui_modules += {'egl-headless' : egl_headless_ss}
 endif
