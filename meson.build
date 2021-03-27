@@ -181,7 +181,7 @@ if targetos == 'windows'
                                       include_directories: include_directories('.'))
 elif targetos == 'darwin'
   coref = dependency('appleframeworks', modules: 'CoreFoundation')
-  iokit = dependency('appleframeworks', modules: 'IOKit', required: false)
+  iokit = dependency('appleframeworks', modules: 'IOKit', required: 'CONFIG_IOS' not in config_host)
 elif targetos == 'sunos'
   socket = [cc.find_library('socket'),
             cc.find_library('nsl'),
@@ -1056,8 +1056,7 @@ if get_option('cfi')
   add_global_link_arguments(cfi_flags, native: false, language: ['c', 'cpp', 'objc'])
 endif
 
-have_host_block_device = (targetos != 'darwin' or
-    cc.has_header('IOKit/storage/IOMedia.h'))
+have_host_block_device = (targetos != 'darwin' or (cc.has_header('IOKit/storage/IOMedia.h') and ('CONFIG_IOS' not in config_host)))
 
 #################
 # config-host.h #
@@ -1153,7 +1152,7 @@ config_host_data.set('HAVE_SYS_IOCCOM_H', cc.has_header('sys/ioccom.h'))
 config_host_data.set('HAVE_SYS_KCOV_H', cc.has_header('sys/kcov.h'))
 config_host_data.set('HAVE_SYSTEM_FUNCTION', cc.has_function('system', prefix: '#include <stdlib.h>'))
 config_host_data.set('HAVE_HOST_BLOCK_DEVICE', have_host_block_device)
-config_host_data.set('HAVE_SYS_DISK_H', cc.has_header('sys/disk.h'))
+config_host_data.set('HAVE_SYS_DISK_H', cc.has_header('sys/disk.h') and ('CONFIG_IOS' not in config_host))
 
 config_host_data.set('CONFIG_PREADV', cc.has_function('preadv', prefix: '#include <sys/uio.h>'))
 
