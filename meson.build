@@ -257,14 +257,38 @@ if not get_option('tcg').disabled()
 
     # Tell our compiler how to generate our TCTI gadgets.
     gadget_generator = 'tcg/@0@/tcti-gadget-gen.py'.format(tcg_arch)
-    tcti_gadgets = custom_target('tcti-gadgets.c.inc',
-                                output: 'tcti-gadgets.c.inc',
-                                input: gadget_generator,
-                                command: [find_program(gadget_generator), '@OUTPUT@'],
-                                build_by_default: true,
-                                build_always_stale: false)
+    gadgets = [
+      'tcti_misc_gadgets.c', 
+      'tcti_conditionals_gadgets.c', 
+      'tcti_mov_gadgets.c', 
+      'tcti_load_gadgets.c', 
+      'tcti_store_gadgets.c', 
+      'tcti_arithmetic_gadgets.c', 
+      'tcti_logical_gadgets.c', 
+      'tcti_extension_gadgets.c', 
+      'tcti_byteswap_gadgets.c', 
+      'tcti_qemu_ld_gadgets.c', 
+      'tcti_qemu_st_gadgets.c', 
+      'tcti_misc_gadgets.h', 
+      'tcti_conditionals_gadgets.h', 
+      'tcti_mov_gadgets.h', 
+      'tcti_load_gadgets.h', 
+      'tcti_store_gadgets.h', 
+      'tcti_arithmetic_gadgets.h', 
+      'tcti_logical_gadgets.h', 
+      'tcti_extension_gadgets.h', 
+      'tcti_byteswap_gadgets.h', 
+      'tcti_qemu_ld_gadgets.h', 
+      'tcti_qemu_st_gadgets.h', 
+      'tcti_gadgets.h']
 
-    genh += tcti_gadgets
+    tcti_gadgets = custom_target('tcti-gadgets.h',
+                              output: gadgets,
+                              input: gadget_generator,
+                              command: [find_program(gadget_generator)],
+                              build_by_default: true,
+                              build_always_stale: false)
+
     
   elif config_host['ARCH'] == 'sparc64'
     tcg_arch = 'sparc'
@@ -1943,6 +1967,8 @@ if get_option('b_lto')
 endif
 common_ss.add(pagevary)
 specific_ss.add(files('page-vary.c'))
+specific_ss.add(when: 'CONFIG_TCG_INTERPRETER', if_true: files('disas/tci.c', 'tcg/tci.c'))
+specific_ss.add(when: 'CONFIG_TCG_THREADED_INTERPRETER', if_true: tcti_gadgets)
 
 subdir('backends')
 subdir('disas')

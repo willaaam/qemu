@@ -22,11 +22,13 @@
  * THE SOFTWARE.
  */
 
+//#define TCTI_GADGET_RICH_DISASSEMBLY
+
 #define TCTI_GADGET_IMMEDIATE_ARRAY_LEN 64
 
-// Grab our gadget definitions.
-// FIXME: use the system path instead of hardcoding this?
-#include "tcti-gadgets.c.inc"
+
+// Grab our gadget headers.
+#include "tcti_gadgets.h"
 
 /* Marker for missing code. */
 #define TODO() \
@@ -575,6 +577,12 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
 }
 
 
+static void warn_slow_memop(const TCGArg arg)
+{
+    fprintf(stderr, "--- NOTE: emitting non-optimized memop at offset %i\n", TLB_MASK_TABLE_OFS(get_mmuidx(arg)));
+}
+
+
 /**
  * Generate every other operation.
  */
@@ -1032,7 +1040,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
             case -64:  LD_MEMOP_HANDLER(gadget, args[2],  off64_i32, a_bits, s_bits); break;
             case -96:  LD_MEMOP_HANDLER(gadget, args[2],  off96_i32, a_bits, s_bits); break;
             case -128: LD_MEMOP_HANDLER(gadget, args[2], off128_i32, a_bits, s_bits); break;
-            default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); break;
+            default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); warn_slow_memop(args[2]); break;
         }
 
         // Args:
@@ -1083,7 +1091,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
                 case -64:  LD_MEMOP_HANDLER(gadget, args[2],  off64_i64, a_bits, s_bits); break;
                 case -96:  LD_MEMOP_HANDLER(gadget, args[2],  off96_i64, a_bits, s_bits); break;
                 case -128: LD_MEMOP_HANDLER(gadget, args[2], off128_i64, a_bits, s_bits); break;
-                default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); break;
+                default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); warn_slow_memop(args[2]); break;
             }
             // Args:
             // - an immediate32 encodes our operation index 
@@ -1106,7 +1114,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
             case -64:  ST_MEMOP_HANDLER(gadget, args[2],  off64_i32, a_bits, s_bits); break;
             case -96:  ST_MEMOP_HANDLER(gadget, args[2],  off96_i32, a_bits, s_bits); break;
             case -128: ST_MEMOP_HANDLER(gadget, args[2], off128_i32, a_bits, s_bits); break;
-            default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); break;
+            default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); warn_slow_memop(args[2]); break;
         }
 
         // Args:
@@ -1158,7 +1166,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
                 case -64:  ST_MEMOP_HANDLER(gadget, args[2],  off64_i64, a_bits, s_bits); break;
                 case -96:  ST_MEMOP_HANDLER(gadget, args[2],  off96_i64, a_bits, s_bits); break;
                 case -128: ST_MEMOP_HANDLER(gadget, args[2], off128_i64, a_bits, s_bits); break;
-                default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); break;
+                default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); warn_slow_memop(args[2]); break;
             }
 
             // Args:
@@ -1318,8 +1326,11 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
 /* Disassemble TCI bytecode. */
 int print_insn_tcti(bfd_vma addr, disassemble_info *info)
 {
+
+#ifdef TCTI_GADGET_RICH_DISASSEMBLY
     Dl_info symbol_info = {};
     char symbol_name[48] ;
+#endif
 
     int status;
     uint64_t block;
@@ -1331,15 +1342,21 @@ int print_insn_tcti(bfd_vma addr, disassemble_info *info)
         return -1;
     }
 
+#ifdef TCTI_GADGET_RICH_DISASSEMBLY
     // Most of our disassembly stream will be gadgets. Try to get their names, for nice output.
     dladdr((void *)block, &symbol_info);
 
     if(symbol_info.dli_sname != 0) {
-        strlcpy(symbol_name, symbol_info.dli_sname, 47);
+        strncpy(symbol_name, symbol_info.dli_sname, sizeof(symbol_name));
+        symbol_name[sizeof(symbol_name) - 1] = 0;
         info->fprintf_func(info->stream, "%s", symbol_name);
     } else {
         info->fprintf_func(info->stream, "%016llx", block);
     }
+
+#else
+    info->fprintf_func(info->stream, "%016llx", block);
+#endif
 
     return sizeof(block);
 }
