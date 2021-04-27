@@ -121,6 +121,9 @@ add_global_arguments(config_host['QEMU_CXXFLAGS'].split(),
 add_global_link_arguments(config_host['QEMU_LDFLAGS'].split(),
                           native: false, language: ['c', 'cpp', 'objc'])
 
+add_global_arguments('-Wno-unused-command-line-argument', native: false, language: ['c', 'objc'])
+add_global_link_arguments('-ldl', native: false, language: ['c', 'cpp', 'objc'])
+
 if targetos == 'linux'
   add_project_arguments('-isystem', meson.current_source_dir() / 'linux-headers',
                         '-isystem', 'linux-headers',
@@ -258,30 +261,41 @@ if not get_option('tcg').disabled()
     # Tell our compiler how to generate our TCTI gadgets.
     gadget_generator = 'tcg/@0@/tcti-gadget-gen.py'.format(tcg_arch)
     gadgets = [
-      'tcti_misc_gadgets.c', 
-      'tcti_conditionals_gadgets.c', 
-      'tcti_mov_gadgets.c', 
-      'tcti_load_gadgets.c', 
-      'tcti_store_gadgets.c', 
-      'tcti_arithmetic_gadgets.c', 
-      'tcti_logical_gadgets.c', 
-      'tcti_extension_gadgets.c', 
-      'tcti_byteswap_gadgets.c', 
-      'tcti_qemu_ld_gadgets.c', 
-      'tcti_qemu_st_gadgets.c', 
-      'tcti_misc_gadgets.h', 
-      'tcti_conditionals_gadgets.h', 
-      'tcti_mov_gadgets.h', 
-      'tcti_load_gadgets.h', 
-      'tcti_store_gadgets.h', 
-      'tcti_arithmetic_gadgets.h', 
-      'tcti_logical_gadgets.h', 
-      'tcti_extension_gadgets.h', 
-      'tcti_byteswap_gadgets.h', 
-      'tcti_qemu_ld_gadgets.h', 
-      'tcti_qemu_st_gadgets.h', 
-      'tcti_gadgets.h']
-
+        'tcti_gadgets.h',
+        'tcti_misc_gadgets.c',
+        'tcti_misc_gadgets.s',
+        'tcti_misc_gadgets.h',
+        'tcti_conditionals_gadgets.c',
+        'tcti_conditionals_gadgets.s',
+        'tcti_conditionals_gadgets.h',
+        'tcti_mov_gadgets.c',
+        'tcti_mov_gadgets.s',
+        'tcti_mov_gadgets.h',
+        'tcti_load_gadgets.c',
+        'tcti_load_gadgets.s',
+        'tcti_load_gadgets.h',
+        'tcti_store_gadgets.c',
+        'tcti_store_gadgets.s',
+        'tcti_store_gadgets.h',
+        'tcti_arithmetic_gadgets.c',
+        'tcti_arithmetic_gadgets.s',
+        'tcti_arithmetic_gadgets.h',
+        'tcti_logical_gadgets.c',
+        'tcti_logical_gadgets.s',
+        'tcti_logical_gadgets.h',
+        'tcti_extension_gadgets.c',
+        'tcti_extension_gadgets.s',
+        'tcti_extension_gadgets.h',
+        'tcti_byteswap_gadgets.c',
+        'tcti_byteswap_gadgets.s',
+        'tcti_byteswap_gadgets.h',
+        'tcti_qemu_ld_gadgets.c',
+        'tcti_qemu_ld_gadgets.s',
+        'tcti_qemu_ld_gadgets.h',
+        'tcti_qemu_st_gadgets.c',
+        'tcti_qemu_st_gadgets.s',
+        'tcti_qemu_st_gadgets.h',
+    ]
     tcti_gadgets = custom_target('tcti-gadgets.h',
                               output: gadgets,
                               input: gadget_generator,
@@ -498,7 +512,7 @@ endif
 rt = cc.find_library('rt', required: false)
 libdl = not_found
 if 'CONFIG_PLUGIN' in config_host
-  libdl = cc.find_library('dl', required: true)
+  libdl = dependency('dl', required: true)
 endif
 libiscsi = not_found
 if not get_option('libiscsi').auto() or have_block
@@ -1967,7 +1981,7 @@ if get_option('b_lto')
 endif
 common_ss.add(pagevary)
 specific_ss.add(files('page-vary.c'))
-specific_ss.add(when: 'CONFIG_TCG_INTERPRETER', if_true: files('disas/tci.c', 'tcg/tci.c'))
+specific_ss.add(when: 'CONFIG_TCG_INTERPRETER', if_true: files('tcg/tci.c'))
 specific_ss.add(when: 'CONFIG_TCG_THREADED_INTERPRETER', if_true: tcti_gadgets)
 
 subdir('backends')

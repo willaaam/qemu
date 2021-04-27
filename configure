@@ -1604,6 +1604,7 @@ for opt do
   --enable-gio) gio=yes
   ;;
   --disable-gio) gio=no
+  ;;
   --enable-slirp-smbd) slirp_smbd=yes
   ;;
   --disable-slirp-smbd) slirp_smbd=no

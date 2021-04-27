@@ -22,7 +22,9 @@
  * THE SOFTWARE.
  */
 
-//#define TCTI_GADGET_RICH_DISASSEMBLY
+
+// Rich disassembly is nice in theory, but it's -slow-.
+#define TCTI_GADGET_RICH_DISASSEMBLY
 
 #define TCTI_GADGET_IMMEDIATE_ARRAY_LEN 64
 
@@ -1037,6 +1039,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         void *gadget;
 
         switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
+            case -32:  LD_MEMOP_HANDLER(gadget, args[2],  off32_i32, a_bits, s_bits); break;
             case -64:  LD_MEMOP_HANDLER(gadget, args[2],  off64_i32, a_bits, s_bits); break;
             case -96:  LD_MEMOP_HANDLER(gadget, args[2],  off96_i32, a_bits, s_bits); break;
             case -128: LD_MEMOP_HANDLER(gadget, args[2], off128_i32, a_bits, s_bits); break;
@@ -1062,7 +1065,11 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         // this is a common case. Delegate to our special-case handler.
         if (args[2] == 0x3a) {
             switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
-
+                case -32: 
+                    gadget = (a_bits >= s_bits) ? 
+                        gadget_qemu_ld_leq_aligned_mode3a_off32_i64 :
+                        gadget_qemu_ld_leq_unaligned_mode3a_off32_i64;
+                    break;
                 case -64: 
                     gadget = (a_bits >= s_bits) ? 
                         gadget_qemu_ld_leq_aligned_mode3a_off64_i64 :
@@ -1088,6 +1095,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         // Otherwise, handle the generic case.
         else {
             switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
+                case -32:  LD_MEMOP_HANDLER(gadget, args[2],  off32_i64, a_bits, s_bits); break;
                 case -64:  LD_MEMOP_HANDLER(gadget, args[2],  off64_i64, a_bits, s_bits); break;
                 case -96:  LD_MEMOP_HANDLER(gadget, args[2],  off96_i64, a_bits, s_bits); break;
                 case -128: LD_MEMOP_HANDLER(gadget, args[2], off128_i64, a_bits, s_bits); break;
@@ -1111,6 +1119,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         void *gadget;
 
         switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
+            case -32:  ST_MEMOP_HANDLER(gadget, args[2],  off32_i32, a_bits, s_bits); break;
             case -64:  ST_MEMOP_HANDLER(gadget, args[2],  off64_i32, a_bits, s_bits); break;
             case -96:  ST_MEMOP_HANDLER(gadget, args[2],  off96_i32, a_bits, s_bits); break;
             case -128: ST_MEMOP_HANDLER(gadget, args[2], off128_i32, a_bits, s_bits); break;
@@ -1137,7 +1146,11 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         // this is a common case. Delegate to our special-case handler.
         if (args[2] == 0x3a) {
             switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
-
+                case -32: 
+                    gadget = (a_bits >= s_bits) ? 
+                        gadget_qemu_st_leq_aligned_mode3a_off32_i64 :
+                        gadget_qemu_st_leq_unaligned_mode3a_off32_i64;
+                    break;
                 case -64: 
                     gadget = (a_bits >= s_bits) ? 
                         gadget_qemu_st_leq_aligned_mode3a_off64_i64 :
@@ -1163,6 +1176,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         // Otherwise, handle the generic case.
         else {
             switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
+                case -32:  ST_MEMOP_HANDLER(gadget, args[2],  off32_i32, a_bits, s_bits); break;
                 case -64:  ST_MEMOP_HANDLER(gadget, args[2],  off64_i64, a_bits, s_bits); break;
                 case -96:  ST_MEMOP_HANDLER(gadget, args[2],  off96_i64, a_bits, s_bits); break;
                 case -128: ST_MEMOP_HANDLER(gadget, args[2], off128_i64, a_bits, s_bits); break;
@@ -1351,11 +1365,11 @@ int print_insn_tcti(bfd_vma addr, disassemble_info *info)
         symbol_name[sizeof(symbol_name) - 1] = 0;
         info->fprintf_func(info->stream, "%s", symbol_name);
     } else {
-        info->fprintf_func(info->stream, "%016llx", block);
+        info->fprintf_func(info->stream, "%016lx", block);
     }
 
 #else
-    info->fprintf_func(info->stream, "%016llx", block);
+    info->fprintf_func(info->stream, "%016lx", block);
 #endif
 
     return sizeof(block);
