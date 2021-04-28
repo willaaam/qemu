@@ -53,6 +53,10 @@ def START_COLLECTION(name):
 
     global current_collection
 
+    # If we already have a collection for this, skip it.
+    if name in output_files:
+        return
+
     # Create the relevant output files
     new_c_file = open(f"tcti_{name}_gadgets.c", "w")
     new_s_file = open(f"tcti_{name}_gadgets.s", "w")
@@ -152,10 +156,10 @@ def with_dnm(name, *lines):
     c_file, s_file, h_file = _get_output_files()
 
     # Print out an extern.
-    print(f"extern void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}];", file=h_file)
+    print(f"extern const void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}];", file=h_file)
 
     # Print out an array that contains all of our gadgets, for lookup.
-    print(f"void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}] = ", end="", file=c_file)
+    print(f"const void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}] = ", end="", file=c_file)
     print("{", file=c_file)
 
     # D array
@@ -183,10 +187,10 @@ def with_dn_immediate(name, *lines, immediate_range):
     c_file, s_file, h_file = _get_output_files()
 
     # Print out an extern.
-    print(f"extern void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{len(immediate_range)}];", file=h_file)
+    print(f"extern const void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{len(immediate_range)}];", file=h_file)
 
     # Print out an array that contains all of our gadgets, for lookup.
-    print(f"void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{len(immediate_range)}] = ", end="", file=c_file)
+    print(f"const void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{len(immediate_range)}] = ", end="", file=c_file)
     print("{", file=c_file)
 
     # D array
@@ -213,10 +217,10 @@ def with_pair(name, substitutions, *lines):
     # Fetch the files we'll be using for output.
     c_file, s_file, h_file = _get_output_files()
 
-    print(f"extern void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}];", file=h_file)
+    print(f"extern const void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}];", file=h_file)
 
     # Print out an array that contains all of our gadgets, for lookup.
-    print(f"void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}] = ", end="", file=c_file)
+    print(f"const void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}] = ", end="", file=c_file)
     print("{", file=c_file)
 
     # N array
@@ -283,10 +287,10 @@ def with_single(name, substitution, *lines):
     # Fetch the files we'll be using for output.
     c_file, s_file, h_file = _get_output_files()
 
-    print(f"extern void* gadget_{name}[{TCG_REGISTER_COUNT}];", file=h_file)
+    print(f"extern const void* gadget_{name}[{TCG_REGISTER_COUNT}];", file=h_file)
 
     # Print out an array that contains all of our gadgets, for lookup.
-    print(f"void* gadget_{name}[{TCG_REGISTER_COUNT}] = ", end="", file=c_file)
+    print(f"const void* gadget_{name}[{TCG_REGISTER_COUNT}] = ", end="", file=c_file)
     print("{", file=c_file)
 
     for n in TCG_REGISTER_NUMBERS:
@@ -619,10 +623,11 @@ simple("mb_st",  "dmb ishst")
 simple("mb_ld",  "dmb ishld")
 
 
-START_COLLECTION("conditionals")
 
 
 for condition in ARCH_CONDITION_CODES:
+
+    START_COLLECTION("setcond")
 
     # Performs a comparison between two operands.
     with_dnm(f"setcond_i32_{condition}",
@@ -643,6 +648,8 @@ for condition in ARCH_CONDITION_CODES:
     # This is a slight mercy for the branch predictor, as not every conditional
     # branch is funneled throught the same address.
     #
+
+    START_COLLECTION("brcond")
 
     # Branches iff a given comparison is true.
     with_dnm(f'brcond_i32_{condition}',
@@ -697,19 +704,22 @@ with_d("movi_i64", "ldr Xd, [x28], #8")
 with_d_immediate("movi_imm_i32", "mov Wd, #Ii", immediate_range=range(64))
 with_d_immediate("movi_imm_i64", "mov Xd, #Ii", immediate_range=range(64))
 
-START_COLLECTION("load")
+START_COLLECTION("load_unsigned")
 
 # LOAD variants.
 # TODO: should the signed variants have X variants for _i64?
 ldst_dn("ld8u",      "ldrb  Wd, [Xn, x27]")
+ldst_dn("ld16u",     "ldrh  Wd, [Xn, x27]")
+ldst_dn("ld32u",     "ldr   Wd, [Xn, x27]")
+ldst_dn("ld_i64",    "ldr   Xd, [Xn, x27]")
+
+START_COLLECTION("load_signed")
+
 ldst_dn("ld8s_i32",  "ldrsb Wd, [Xn, x27]")
 ldst_dn("ld8s_i64",  "ldrsb Xd, [Xn, x27]")
-ldst_dn("ld16u",     "ldrh  Wd, [Xn, x27]")
 ldst_dn("ld16s_i32", "ldrsh Wd, [Xn, x27]")
 ldst_dn("ld16s_i64", "ldrsh Xd, [Xn, x27]")
-ldst_dn("ld32u",     "ldr   Wd, [Xn, x27]")
 ldst_dn("ld32s_i64", "ldrsw Xd, [Xn, x27]")
-ldst_dn("ld_i64",    "ldr   Xd, [Xn, x27]")
 
 START_COLLECTION("store")
 
@@ -775,39 +785,43 @@ with_dn("bswap16",    "rev w27, Wn", "lsr Wd, w27, #16")
 with_dn("bswap32",    "rev Wd, Wn")
 with_dn("bswap64",    "rev Xd, Xn")
 
-START_COLLECTION("qemu_ld")
 
 # Handlers for QEMU_LD, which handles guest <- host loads.
 for subtype in ('aligned', 'unaligned', 'slowpath'):
     is_aligned  = (subtype == 'aligned')
     is_slowpath = (subtype == 'slowpath')
 
+    START_COLLECTION(f"qemu_ld_{subtype}_unsigned_le")
+
     ld_thunk(f"qemu_ld_ub_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ret_ldub_mmu",
         fastpath_32b=["ldrb Wd, [Xn, x27]"], fastpath_64b=["ldrb Wd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-    ld_thunk(f"qemu_ld_sb_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ret_ldub_mmu_signed",
-        fastpath_32b=["ldrsb Wd, [Xn, x27]"], fastpath_64b=["ldrsb Xd, [Xn, x27]"],
         force_slowpath=is_slowpath,
     )
     ld_thunk(f"qemu_ld_leuw_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_le_lduw_mmu",
         fastpath_32b=["ldrh Wd, [Xn, x27]"], fastpath_64b=["ldrh Wd, [Xn, x27]"],
         force_slowpath=is_slowpath,
     )
-    ld_thunk(f"qemu_ld_lesw_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_le_lduw_mmu_signed",
-        fastpath_32b=["ldrsh Wd, [Xn, x27]"], fastpath_64b=["ldrsh Xd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
     ld_thunk(f"qemu_ld_leul_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_le_ldul_mmu",
         fastpath_32b=["ldr Wd, [Xn, x27]"], fastpath_64b=["ldr Wd, [Xn, x27]"],
         force_slowpath=is_slowpath,
     )
-    ld_thunk(f"qemu_ld_lesl_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_le_ldul_mmu_signed",
-        fastpath_32b=["ldrsw Xd, [Xn, x27]"], fastpath_64b=["ldrsw Xd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
     ld_thunk(f"qemu_ld_leq_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_le_ldq_mmu",
         fastpath_32b=["ldr Xd, [Xn, x27]"], fastpath_64b=["ldr Xd, [Xn, x27]"],
+        force_slowpath=is_slowpath,
+    )
+
+    START_COLLECTION(f"qemu_ld_{subtype}_signed_le")
+
+    ld_thunk(f"qemu_ld_sb_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ret_ldub_mmu_signed",
+        fastpath_32b=["ldrsb Wd, [Xn, x27]"], fastpath_64b=["ldrsb Xd, [Xn, x27]"],
+        force_slowpath=is_slowpath,
+    )
+    ld_thunk(f"qemu_ld_lesw_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_le_lduw_mmu_signed",
+        fastpath_32b=["ldrsh Wd, [Xn, x27]"], fastpath_64b=["ldrsh Xd, [Xn, x27]"],
+        force_slowpath=is_slowpath,
+    )
+    ld_thunk(f"qemu_ld_lesl_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_le_ldul_mmu_signed",
+        fastpath_32b=["ldrsw Xd, [Xn, x27]"], fastpath_64b=["ldrsw Xd, [Xn, x27]"],
         force_slowpath=is_slowpath,
     )
 
@@ -816,6 +830,8 @@ for subtype in ('aligned', 'unaligned', 'slowpath'):
         fastpath_32b=["ldr Xd, [Xn, x27]"], fastpath_64b=["ldr Xd, [Xn, x27]"],
         force_slowpath=is_slowpath, immediate=0x3a
     )
+
+    START_COLLECTION(f"qemu_ld_{subtype}_be")
 
     # For now, leave the rare/big-endian stuff slow-path only.
     ld_thunk(f"qemu_ld_beuw_{subtype}", None, None, "helper_be_lduw_mmu",         
@@ -830,13 +846,14 @@ for subtype in ('aligned', 'unaligned', 'slowpath'):
             is_aligned=is_aligned, force_slowpath=is_slowpath)
 
 
-START_COLLECTION("qemu_st")
 
 
 # Handlers for QEMU_ST, which handles guest -> host stores.
 for subtype in ('aligned', 'unaligned', 'slowpath'):
     is_aligned  = (subtype == 'aligned')
     is_slowpath = (subtype == 'slowpath')
+
+    START_COLLECTION(f"qemu_st_{subtype}_le")
 
     st_thunk(f"qemu_st_ub_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ret_stb_mmu",
         fastpath_32b=["strb Wd, [Xn, x27]"], fastpath_64b=["strb Wd, [Xn, x27]"],
@@ -860,6 +877,8 @@ for subtype in ('aligned', 'unaligned', 'slowpath'):
         fastpath_32b=["str Xd, [Xn, x27]"], fastpath_64b=["str Xd, [Xn, x27]"],
         force_slowpath=is_slowpath, immediate=0x3a
     )
+
+    START_COLLECTION(f"qemu_st_{subtype}_be")
 
     # For now, leave the rare/big-endian stuff slow-path only.
     st_thunk(f"qemu_st_beuw_{subtype}", None, None, "helper_be_stw_mmu",  

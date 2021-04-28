@@ -365,13 +365,13 @@ tcg_target_ulong helper_be_ldul_mmu_signed(CPUArchState *env, target_ulong addr,
 
 
 /* Write gadget pointer. */
-static void tcg_out_nullary_gadget(TCGContext *s, void *gadget)
+static void tcg_out_nullary_gadget(TCGContext *s, const void *gadget)
 {
     tcg_out_immediate(s, (tcg_target_ulong)gadget);
 }
 
 /* Write gadget pointer, plus 64b immediate. */
-static void tcg_out_imm64_gadget(TCGContext *s, void *gadget, tcg_target_ulong immediate)
+static void tcg_out_imm64_gadget(TCGContext *s, const void *gadget, tcg_target_ulong immediate)
 {
     tcg_out_nullary_gadget(s, gadget);
     tcg_out64(s, immediate);
@@ -379,21 +379,21 @@ static void tcg_out_imm64_gadget(TCGContext *s, void *gadget, tcg_target_ulong i
 
 
 /* Write gadget pointer (one register). */
-static void tcg_out_unary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS], unsigned reg0)
+static void tcg_out_unary_gadget(TCGContext *s, const void *gadget_base[TCG_TARGET_NB_REGS], unsigned reg0)
 {
     tcg_out_nullary_gadget(s, gadget_base[reg0]);
 }
 
 
 /* Write gadget pointer (two registers). */
-static void tcg_out_binary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1)
+static void tcg_out_binary_gadget(TCGContext *s, const void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1)
 {
     tcg_out_nullary_gadget(s, gadget_base[reg0][reg1]);
 }
 
 
 /* Write gadget pointer (three registers). */
-static void tcg_out_ternary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1, unsigned reg2)
+static void tcg_out_ternary_gadget(TCGContext *s, const void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1, unsigned reg2)
 {
     tcg_out_nullary_gadget(s, gadget_base[reg0][reg1][reg2]);
 }
@@ -403,10 +403,10 @@ static void tcg_out_ternary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_N
  * Version of our LDST generator that defers to more optimized gadgets selectively.
  */
 static void tcg_out_ldst_gadget_inner(TCGContext *s, 
-    void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], 
-    void *gadget_pos_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
-    void *gadget_shifted_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
-    void *gadget_neg_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+    const void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], 
+    const void *gadget_pos_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+    const void *gadget_shifted_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+    const void *gadget_neg_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
     unsigned reg0, unsigned reg1, uint32_t offset)
 {
     int64_t extended_offset = (int32_t)offset;
