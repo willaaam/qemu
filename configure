@@ -479,6 +479,8 @@ for opt do
   ;;
   --cc=*) CC="$optarg"
   ;;
+  --ld=*) LD="$optarg"
+  ;;
   --cxx=*) CXX="$optarg"
   ;;
   --cpu=*) cpu="$optarg"
@@ -907,6 +909,8 @@ for opt do
   --cross-prefix=*)
   ;;
   --cc=*)
+  ;;
+  --ld=*) ld="$optarg"
   ;;
   --host-cc=*) host_cc="$optarg"
   ;;
@@ -1695,6 +1699,13 @@ case "$cpu" in
            ;;
     # No special flags required for other host CPUs
 esac
+
+# XXX
+QEMU_LDFLAGS="$QEMU_LDFLAGS -Wl,-no_deduplicate"
+QEMU_LDFLAGS="$QEMU_LDFLAGS -Wl,-random_uuid"
+#QEMU_LDFLAGS="$QEMU_LDFLAGS -Wl,-force_load"
+QEMU_LDFLAGS="$QEMU_LDFLAGS -Wl,-no_compact_unwind"
+
 
 eval "cross_cc_${cpu}=\$host_cc"
 cross_cc_vars="$cross_cc_vars cross_cc_${cpu}"
@@ -6472,6 +6483,9 @@ else
     cross_arg="--native-file config-meson.cross"
 fi
 mv $cross config-meson.cross
+
+export CC_LD="$ld"
+export CXX_LD="$ld"
 
 rm -rf meson-private meson-info meson-logs
 unset staticpic
