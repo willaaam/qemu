@@ -22,11 +22,15 @@
  * THE SOFTWARE.
  */
 
+
+// Rich disassembly is nice in theory, but it's -slow-.
+#define TCTI_GADGET_RICH_DISASSEMBLY
+
 #define TCTI_GADGET_IMMEDIATE_ARRAY_LEN 64
 
-// Grab our gadget definitions.
-// FIXME: use the system path instead of hardcoding this?
-#include "tcti-gadgets.c.inc"
+
+// Grab our gadget headers.
+#include "tcti_gadgets.h"
 
 /* Marker for missing code. */
 #define TODO() \
@@ -97,6 +101,39 @@
             ST_MEMOP_LOOKUP(variable, arg, aligned_ ## suffix ); \
         } else { \
             ST_MEMOP_LOOKUP(gadget, arg, unaligned_ ## suffix); \
+        }
+
+
+#define LOOKUP_SPECIAL_CASE_LDST_GADGET(arg, name, mode) \
+    switch(TLB_MASK_TABLE_OFS(get_mmuidx(arg))) { \
+        case -32:  \
+            gadget = (a_bits >= s_bits) ?  \
+                gadget_qemu_ ## name ## _aligned_ ## mode ## _off32_i64 : \
+                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off32_i64; \
+            break; \
+        case -48:  \
+            gadget = (a_bits >= s_bits) ?  \
+                gadget_qemu_ ## name ## _aligned_ ## mode ## _off48_i64 : \
+                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off48_i64; \
+            break; \
+        case -64: \
+            gadget = (a_bits >= s_bits) ? \
+                gadget_qemu_ ## name ## _aligned_ ## mode ## _off64_i64 : \
+                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off64_i64; \
+            break; \
+        case -96: \
+            gadget = (a_bits >= s_bits) ? \
+                gadget_qemu_ ## name ## _aligned_ ## mode ## _off96_i64 : \
+                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off96_i64; \
+            break; \
+        case -128: \
+            gadget = (a_bits >= s_bits) ? \
+                gadget_qemu_ ## name ## _aligned_ ## mode ## _off128_i64 : \
+                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off128_i64; \
+            break;\
+        default: \
+            gadget = gadget_qemu_ ## name ## _slowpath_ ## mode ## _off0_i64; \
+            break; \
         }
 
 
@@ -361,13 +398,13 @@ tcg_target_ulong helper_be_ldul_mmu_signed(CPUArchState *env, target_ulong addr,
 
 
 /* Write gadget pointer. */
-static void tcg_out_nullary_gadget(TCGContext *s, void *gadget)
+static void tcg_out_nullary_gadget(TCGContext *s, const void *gadget)
 {
     tcg_out_immediate(s, (tcg_target_ulong)gadget);
 }
 
 /* Write gadget pointer, plus 64b immediate. */
-static void tcg_out_imm64_gadget(TCGContext *s, void *gadget, tcg_target_ulong immediate)
+static void tcg_out_imm64_gadget(TCGContext *s, const void *gadget, tcg_target_ulong immediate)
 {
     tcg_out_nullary_gadget(s, gadget);
     tcg_out64(s, immediate);
@@ -375,21 +412,21 @@ static void tcg_out_imm64_gadget(TCGContext *s, void *gadget, tcg_target_ulong i
 
 
 /* Write gadget pointer (one register). */
-static void tcg_out_unary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS], unsigned reg0)
+static void tcg_out_unary_gadget(TCGContext *s, const void *gadget_base[TCG_TARGET_NB_REGS], unsigned reg0)
 {
     tcg_out_nullary_gadget(s, gadget_base[reg0]);
 }
 
 
 /* Write gadget pointer (two registers). */
-static void tcg_out_binary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1)
+static void tcg_out_binary_gadget(TCGContext *s, const void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1)
 {
     tcg_out_nullary_gadget(s, gadget_base[reg0][reg1]);
 }
 
 
 /* Write gadget pointer (three registers). */
-static void tcg_out_ternary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1, unsigned reg2)
+static void tcg_out_ternary_gadget(TCGContext *s, const void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1, unsigned reg2)
 {
     tcg_out_nullary_gadget(s, gadget_base[reg0][reg1][reg2]);
 }
@@ -399,10 +436,10 @@ static void tcg_out_ternary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_N
  * Version of our LDST generator that defers to more optimized gadgets selectively.
  */
 static void tcg_out_ldst_gadget_inner(TCGContext *s, 
-    void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], 
-    void *gadget_pos_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
-    void *gadget_shifted_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
-    void *gadget_neg_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+    const void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], 
+    const void *gadget_pos_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+    const void *gadget_shifted_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+    const void *gadget_neg_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
     unsigned reg0, unsigned reg1, uint32_t offset)
 {
     int64_t extended_offset = (int32_t)offset;
@@ -572,6 +609,12 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
     } else {
         tcg_out_ldst_gadget(s, gadget_ld_i64, ret, arg1, arg2); 
     }
+}
+
+
+static void warn_slow_memop(const TCGArg arg)
+{
+    fprintf(stderr, "--- NOTE: emitting non-optimized memop at offset %i\n", TLB_MASK_TABLE_OFS(get_mmuidx(arg)));
 }
 
 
@@ -1029,10 +1072,12 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         void *gadget;
 
         switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
+            case -32:  LD_MEMOP_HANDLER(gadget, args[2],  off32_i32, a_bits, s_bits); break;
+            case -48:  LD_MEMOP_HANDLER(gadget, args[2],  off48_i32, a_bits, s_bits); break;
             case -64:  LD_MEMOP_HANDLER(gadget, args[2],  off64_i32, a_bits, s_bits); break;
             case -96:  LD_MEMOP_HANDLER(gadget, args[2],  off96_i32, a_bits, s_bits); break;
             case -128: LD_MEMOP_HANDLER(gadget, args[2], off128_i32, a_bits, s_bits); break;
-            default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); break;
+            default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); warn_slow_memop(args[2]); break;
         }
 
         // Args:
@@ -1050,41 +1095,29 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
 
         void *gadget;
 
-        // Special optimization case: if we have an operation/target of 0x3A, 
-        // this is a common case. Delegate to our special-case handler.
-        if (args[2] == 0x3a) {
-            switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
-
-                case -64: 
-                    gadget = (a_bits >= s_bits) ? 
-                        gadget_qemu_ld_leq_aligned_mode3a_off64_i64 :
-                        gadget_qemu_ld_leq_unaligned_mode3a_off64_i64;
-                    break;
-                case -96: 
-                    gadget = (a_bits >= s_bits) ? 
-                        gadget_qemu_ld_leq_aligned_mode3a_off96_i64 :
-                        gadget_qemu_ld_leq_unaligned_mode3a_off96_i64;
-                    break;
-                case -128: 
-                    gadget = (a_bits >= s_bits) ? 
-                        gadget_qemu_ld_leq_aligned_mode3a_off128_i64 :
-                        gadget_qemu_ld_leq_unaligned_mode3a_off128_i64;
-                    break;
-
-                default: 
-                    gadget = gadget_qemu_ld_leq_slowpath_mode3a_off0_i64;
-                    break;
-            }
+        // Special optimization case: if we have an common case. 
+        // Delegate to our special-case handler.
+        if (args[2] == 0x02) {
+            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], ld_ub, mode02)
             tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        } 
+        } else if (args[2] == 0x32) {
+            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], ld_leq, mode32)
+            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
+        } else if(args[2] == 0x3a) {
+            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], ld_leq, mode3a)
+            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
+        }
         // Otherwise, handle the generic case.
         else {
             switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
+                case -32:  LD_MEMOP_HANDLER(gadget, args[2],  off32_i64, a_bits, s_bits); break;
+                case -48:  LD_MEMOP_HANDLER(gadget, args[2],  off48_i64, a_bits, s_bits); break;
                 case -64:  LD_MEMOP_HANDLER(gadget, args[2],  off64_i64, a_bits, s_bits); break;
                 case -96:  LD_MEMOP_HANDLER(gadget, args[2],  off96_i64, a_bits, s_bits); break;
                 case -128: LD_MEMOP_HANDLER(gadget, args[2], off128_i64, a_bits, s_bits); break;
-                default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); break;
+                default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); warn_slow_memop(args[2]); break;
             }
+
             // Args:
             // - an immediate32 encodes our operation index 
             tcg_out_binary_gadget(s, gadget, args[0], args[1]);
@@ -1103,10 +1136,12 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         void *gadget;
 
         switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
+            case -32:  ST_MEMOP_HANDLER(gadget, args[2],  off32_i32, a_bits, s_bits); break;
+            case -48:  ST_MEMOP_HANDLER(gadget, args[2],  off48_i32, a_bits, s_bits); break;
             case -64:  ST_MEMOP_HANDLER(gadget, args[2],  off64_i32, a_bits, s_bits); break;
             case -96:  ST_MEMOP_HANDLER(gadget, args[2],  off96_i32, a_bits, s_bits); break;
             case -128: ST_MEMOP_HANDLER(gadget, args[2], off128_i32, a_bits, s_bits); break;
-            default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); break;
+            default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); warn_slow_memop(args[2]); break;
         }
 
         // Args:
@@ -1125,40 +1160,27 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
 
         void *gadget;
 
-        // Special optimization case: if we have an operation/target of 0x3A, 
-        // this is a common case. Delegate to our special-case handler.
-        if (args[2] == 0x3a) {
-            switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
-
-                case -64: 
-                    gadget = (a_bits >= s_bits) ? 
-                        gadget_qemu_st_leq_aligned_mode3a_off64_i64 :
-                        gadget_qemu_st_leq_unaligned_mode3a_off64_i64;
-                    break;
-                case -96: 
-                    gadget = (a_bits >= s_bits) ? 
-                        gadget_qemu_st_leq_aligned_mode3a_off96_i64 :
-                        gadget_qemu_st_leq_unaligned_mode3a_off96_i64;
-                    break;
-                case -128: 
-                    gadget = (a_bits >= s_bits) ? 
-                        gadget_qemu_st_leq_aligned_mode3a_off128_i64 :
-                        gadget_qemu_st_leq_unaligned_mode3a_off128_i64;
-                    break;
-
-                default: 
-                    gadget = gadget_qemu_st_leq_slowpath_mode3a_off0_i64;
-                    break;
-            }
+        // Special optimization case: if we have an common case. 
+        // Delegate to our special-case handler.
+        if (args[2] == 0x02) {
+            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], st_ub, mode02)
             tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        } 
+        } else if (args[2] == 0x32) {
+            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], st_leq, mode32)
+            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
+        } else if(args[2] == 0x3a) {
+            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], st_leq, mode3a)
+            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
+        }
         // Otherwise, handle the generic case.
         else {
             switch(TLB_MASK_TABLE_OFS(get_mmuidx(args[2]))) {
+                case -32:  ST_MEMOP_HANDLER(gadget, args[2],  off32_i64, a_bits, s_bits); break;
+                case -48:  ST_MEMOP_HANDLER(gadget, args[2],  off48_i64, a_bits, s_bits); break;
                 case -64:  ST_MEMOP_HANDLER(gadget, args[2],  off64_i64, a_bits, s_bits); break;
                 case -96:  ST_MEMOP_HANDLER(gadget, args[2],  off96_i64, a_bits, s_bits); break;
                 case -128: ST_MEMOP_HANDLER(gadget, args[2], off128_i64, a_bits, s_bits); break;
-                default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); break;
+                default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); warn_slow_memop(args[2]); break;
             }
 
             // Args:
@@ -1318,8 +1340,11 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
 /* Disassemble TCI bytecode. */
 int print_insn_tcti(bfd_vma addr, disassemble_info *info)
 {
+
+#ifdef TCTI_GADGET_RICH_DISASSEMBLY
     Dl_info symbol_info = {};
     char symbol_name[48] ;
+#endif
 
     int status;
     uint64_t block;
@@ -1331,15 +1356,21 @@ int print_insn_tcti(bfd_vma addr, disassemble_info *info)
         return -1;
     }
 
+#ifdef TCTI_GADGET_RICH_DISASSEMBLY
     // Most of our disassembly stream will be gadgets. Try to get their names, for nice output.
     dladdr((void *)block, &symbol_info);
 
     if(symbol_info.dli_sname != 0) {
-        strlcpy(symbol_name, symbol_info.dli_sname, 47);
+        strncpy(symbol_name, symbol_info.dli_sname, sizeof(symbol_name));
+        symbol_name[sizeof(symbol_name) - 1] = 0;
         info->fprintf_func(info->stream, "%s", symbol_name);
     } else {
-        info->fprintf_func(info->stream, "%016llx", block);
+        info->fprintf_func(info->stream, "%016lx", block);
     }
+
+#else
+    info->fprintf_func(info->stream, "%016lx", block);
+#endif
 
     return sizeof(block);
 }

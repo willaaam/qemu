@@ -121,6 +121,9 @@ add_global_arguments(config_host['QEMU_CXXFLAGS'].split(),
 add_global_link_arguments(config_host['QEMU_LDFLAGS'].split(),
                           native: false, language: ['c', 'cpp', 'objc'])
 
+add_global_arguments('-Wno-unused-command-line-argument', native: false, language: ['c', 'objc'])
+add_global_link_arguments('-ldl', native: false, language: ['c', 'cpp', 'objc'])
+
 if targetos == 'linux'
   add_project_arguments('-isystem', meson.current_source_dir() / 'linux-headers',
                         '-isystem', 'linux-headers',
@@ -139,6 +142,7 @@ if link_language == 'cpp'
 endif
 if host_machine.system() == 'darwin'
   add_languages('objc', required: false, native: false)
+  add_project_link_arguments(['-fvisibility-inlines-hidden', '-Xlinker', '-no_deduplicate'], native: false, language: ['c', 'cpp', 'objc'])
 endif
 
 sparse = find_program('cgcc', required: get_option('sparse'))
@@ -257,15 +261,68 @@ if not get_option('tcg').disabled()
 
     # Tell our compiler how to generate our TCTI gadgets.
     gadget_generator = 'tcg/@0@/tcti-gadget-gen.py'.format(tcg_arch)
-    tcti_gadgets = custom_target('tcti-gadgets.c.inc',
-                                output: 'tcti-gadgets.c.inc',
-                                input: gadget_generator,
-                                command: [find_program(gadget_generator), '@OUTPUT@'],
-                                build_by_default: true,
-                                build_always_stale: false)
+    tcti_sources = [
+        'tcti_gadgets.h',
+        'tcti_misc_gadgets.c',
+        'tcti_misc_gadgets.h',
+        'tcti_setcond_gadgets.c',
+        'tcti_setcond_gadgets.h',
+        'tcti_brcond_gadgets.c',
+        'tcti_brcond_gadgets.h',
+        'tcti_mov_gadgets.c',
+        'tcti_mov_gadgets.h',
+        'tcti_load_signed_gadgets.c',
+        'tcti_load_signed_gadgets.h',
+        'tcti_load_unsigned_gadgets.c',
+        'tcti_load_unsigned_gadgets.h',
+        'tcti_store_gadgets.c',
+        'tcti_store_gadgets.h',
+        'tcti_arithmetic_gadgets.c',
+        'tcti_arithmetic_gadgets.h',
+        'tcti_logical_gadgets.c',
+        'tcti_logical_gadgets.h',
+        'tcti_extension_gadgets.c',
+        'tcti_extension_gadgets.h',
+        'tcti_byteswap_gadgets.c',
+        'tcti_byteswap_gadgets.h',
+        'tcti_qemu_ld_aligned_signed_le_gadgets.c',
+        'tcti_qemu_ld_aligned_signed_le_gadgets.h',
+        'tcti_qemu_ld_unaligned_signed_le_gadgets.c',
+        'tcti_qemu_ld_unaligned_signed_le_gadgets.h',
+        'tcti_qemu_ld_slowpath_signed_le_gadgets.c',
+        'tcti_qemu_ld_slowpath_signed_le_gadgets.h',
+        'tcti_qemu_ld_aligned_unsigned_le_gadgets.c',
+        'tcti_qemu_ld_aligned_unsigned_le_gadgets.h',
+        'tcti_qemu_ld_unaligned_unsigned_le_gadgets.c',
+        'tcti_qemu_ld_unaligned_unsigned_le_gadgets.h',
+        'tcti_qemu_ld_slowpath_unsigned_le_gadgets.c',
+        'tcti_qemu_ld_slowpath_unsigned_le_gadgets.h',
+        'tcti_qemu_ld_aligned_be_gadgets.c',
+        'tcti_qemu_ld_aligned_be_gadgets.h',
+        'tcti_qemu_ld_unaligned_be_gadgets.c',
+        'tcti_qemu_ld_unaligned_be_gadgets.h',
+        'tcti_qemu_ld_slowpath_be_gadgets.c',
+        'tcti_qemu_ld_slowpath_be_gadgets.h',
+        'tcti_qemu_st_aligned_le_gadgets.c',
+        'tcti_qemu_st_aligned_le_gadgets.h',
+        'tcti_qemu_st_unaligned_le_gadgets.c',
+        'tcti_qemu_st_unaligned_le_gadgets.h',
+        'tcti_qemu_st_slowpath_le_gadgets.c',
+        'tcti_qemu_st_slowpath_le_gadgets.h',
+        'tcti_qemu_st_aligned_be_gadgets.c',
+        'tcti_qemu_st_aligned_be_gadgets.h',
+        'tcti_qemu_st_unaligned_be_gadgets.c',
+        'tcti_qemu_st_unaligned_be_gadgets.h',
+        'tcti_qemu_st_slowpath_be_gadgets.c',
+        'tcti_qemu_st_slowpath_be_gadgets.h',
+    ]
+    tcti_gadgets = custom_target('tcti-gadgets.h',
+                              output: tcti_sources,
+                              input: gadget_generator,
+                              command: [find_program(gadget_generator)],
+                              build_by_default: true,
+                              build_always_stale: false)
 
-    genh += tcti_gadgets
-    
   elif config_host['ARCH'] == 'sparc64'
     tcg_arch = 'sparc'
   elif config_host['ARCH'] == 's390x'
@@ -474,7 +531,7 @@ endif
 rt = cc.find_library('rt', required: false)
 libdl = not_found
 if 'CONFIG_PLUGIN' in config_host
-  libdl = cc.find_library('dl', required: true)
+  libdl = dependency('dl', required: true)
 endif
 libiscsi = not_found
 if not get_option('libiscsi').auto() or have_block
@@ -1545,6 +1602,18 @@ if have_system
   endif
 endif
 
+# For CFI, we need to compile slirp as a static library together with qemu.
+# This is because we register slirp functions as callbacks for QEMU Timers.
+# When using a system-wide shared libslirp, the type information for the
+# callback is missing and the timer call produces a false positive with CFI.
+#
+# Now that slirp_opt has been defined, check if the selected slirp is compatible
+# with control-flow integrity.
+if get_option('cfi') and slirp_opt == 'system'
+  error('Control-Flow Integrity is not compatible with system-wide slirp.' \
+         + ' Please configure with --enable-slirp=git')
+endif
+
 fdt = not_found
 fdt_opt = get_option('fdt')
 if have_system
@@ -1711,6 +1780,7 @@ qom_ss = ss.source_set()
 softmmu_ss = ss.source_set()
 specific_fuzz_ss = ss.source_set()
 specific_ss = ss.source_set()
+#tcti_ss = ss.source_set()
 stub_ss = ss.source_set()
 trace_ss = ss.source_set()
 user_ss = ss.source_set()
@@ -1901,7 +1971,6 @@ subdir('softmmu')
 
 common_ss.add(capstone)
 specific_ss.add(files('cpu.c', 'disas.c', 'gdbstub.c'), capstone)
-specific_ss.add(files('exec-vary.c'))
 specific_ss.add(when: 'CONFIG_TCG', if_true: files(
   'fpu/softfloat.c',
   'tcg/optimize.c',
@@ -1911,7 +1980,32 @@ specific_ss.add(when: 'CONFIG_TCG', if_true: files(
   'tcg/tcg-op.c',
   'tcg/tcg.c',
 ))
-specific_ss.add(when: 'CONFIG_TCG_INTERPRETER', if_true: files('disas/tci.c', 'tcg/tci.c'))
+specific_ss.add(when: 'CONFIG_TCG_INTERPRETER', if_true: files('tcg/tci.c'))
+
+# Work around a gcc bug/misfeature wherein constant propagation looks
+# through an alias:
+#   https://gcc.gnu.org/bugzilla/show_bug.cgi?id=99696
+# to guess that a const variable is always zero.  Without lto, this is
+# impossible, as the alias is restricted to page-vary-common.c.  Indeed,
+# without lto, not even the alias is required -- we simply use different
+# declarations in different compilation units.
+pagevary = files('page-vary-common.c')
+if get_option('b_lto')
+  pagevary_flags = ['-fno-lto']
+  if get_option('cfi')
+    pagevary_flags += '-fno-sanitize=cfi-icall'
+  endif
+  pagevary = static_library('page-vary-common', sources: pagevary,
+                            c_args: pagevary_flags)
+  pagevary = declare_dependency(link_with: pagevary)
+endif
+common_ss.add(pagevary)
+specific_ss.add(files('page-vary.c'))
+specific_ss.add(when: 'CONFIG_TCG_INTERPRETER', if_true: files('tcg/tci.c'))
+
+# FIXME: This is being used for now for development quickness, but these realy should be
+# added to a gadget-specific shared library (tcti_ss).
+specific_ss.add(when: 'CONFIG_TCG_THREADED_INTERPRETER', if_true: tcti_gadgets)
 
 subdir('backends')
 subdir('disas')
@@ -1919,6 +2013,7 @@ subdir('migration')
 subdir('monitor')
 subdir('net')
 subdir('replay')
+subdir('semihosting')
 subdir('hw')
 subdir('accel')
 subdir('plugins')
@@ -2080,6 +2175,12 @@ common_all = static_library('common',
                             dependencies: common_all.dependencies(),
                             name_suffix: 'fa')
 
+#tcti_all = common_ss.apply(config_all, strict: false)
+#tcti_all = shared_library('tcti',
+#                            build_by_default: false,
+#                            sources: tcti_gadgets,
+#                            name_suffix: 'fa')
+
 feature_to_c = find_program('scripts/feature_to_c.sh')
 
 emulators = {}
@@ -2153,7 +2254,7 @@ foreach target : target_dirs
   arch_deps += t.dependencies()
 
   target_common = common_ss.apply(config_target, strict: false)
-  objects = common_all.extract_objects(target_common.sources())
+  objects = [common_all.extract_objects(target_common.sources())] #, tcti_all.extract_all_objects()]
   deps = target_common.dependencies()
 
   target_specific = specific_ss.apply(config_target, strict: false)
@@ -2184,7 +2285,9 @@ foreach target : target_dirs
                  include_directories: target_inc,
                  c_args: c_args,
                  build_by_default: false,
-                 kwargs: build_lib_args)
+                 kwargs: build_lib_args,
+                 #link_with: tcti_all
+                 )
 
   if target.endswith('-softmmu')
     execs = [{
