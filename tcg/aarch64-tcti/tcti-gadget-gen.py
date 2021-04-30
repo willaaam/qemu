@@ -27,7 +27,7 @@ ARCH_CONDITION_CODES = ["eq", "ne", "lt", "ge", "le", "gt", "lo", "hs", "ls", "h
 
 # We'll create a variety of gadgets that assume the MMU's TLB is stored at certain
 # offsets into its structure. These should match the offsets in tcg-target.c.in.
-QEMU_ALLOWED_MMU_OFFSETS = [ 32, 64, 96, 128 ]
+QEMU_ALLOWED_MMU_OFFSETS = [ 32, 48, 64, 96, 128 ]
 
 # Statistics.
 gadgets      = 0
@@ -337,31 +337,14 @@ def with_d(name, *lines):
 
 # Assembly code for saving our machine state before entering the C runtime.
 C_CALL_PROLOGUE = [
-    # Store our machine state.
-    "str x25,      [sp, #-16]!",
     "stp x14, x15, [sp, #-16]!",
-    "stp x12, x13, [sp, #-16]!",
-    "stp x10, x11, [sp, #-16]!",
-    "stp x8,  x9,  [sp, #-16]!",
-    "stp x6,  x7,  [sp, #-16]!",
-    "stp x4,  x5,  [sp, #-16]!",
-    "stp x2,  x3,  [sp, #-16]!",
-    "stp x0,  x1,  [sp, #-16]!",
     "stp x28, lr,  [sp, #-16]!",
 ]
 
 # Assembly code for restoring our machine state after leaving the C runtime.
 C_CALL_EPILOGUE = [
-    "ldp x28, lr, [sp], #16",
-    "ldp x0,  x1, [sp], #16",
-    "ldp x2,  x3, [sp], #16",
-    "ldp x4,  x5, [sp], #16",
-    "ldp x6,  x7, [sp], #16",
-    "ldp x8,  x9, [sp], #16",
-    "ldp x10, x11, [sp], #16",
-    "ldp x12, x13, [sp], #16",
+    "ldp x28, lr,  [sp], #16",
     "ldp x14, x15, [sp], #16",
-    "ldr x25,      [sp], #16",
 ]
 
 
@@ -781,7 +764,7 @@ with_dn("ext8u",      "and Xd, Xn, #0xff")
 math_dn("ext16s",     "sxth", source_is_wn=True)
 with_dn("ext16u",     "and Wd, Wn, #0xffff")
 with_dn("ext32s_i64", "sxtw Xd, Wn")
-with_dn("ext32u_i64", "and Xd, Xn, #0xffffffff")
+with_dn("ext32u_i64", "mov Wd, Wn")
 
 START_COLLECTION("byteswap")
 
@@ -830,7 +813,15 @@ for subtype in ('aligned', 'unaligned', 'slowpath'):
         force_slowpath=is_slowpath,
     )
 
-    # Special variant for the most common mode, as a speedup optimization.
+    # Special variant for the most common modes, as a speedup optimization.
+    ld_thunk(f"qemu_ld_ub_{subtype}_mode02", is_aligned=is_aligned, slowpath_helper="helper_ret_ldub_mmu",
+        fastpath_32b=["ldrb Wd, [Xn, x27]"], fastpath_64b=["ldrb Wd, [Xn, x27]"],
+        force_slowpath=is_slowpath, immediate=0x02
+    )
+    ld_thunk(f"qemu_ld_leq_{subtype}_mode32", is_aligned=is_aligned, slowpath_helper="helper_le_ldq_mmu",
+        fastpath_32b=["ldr Xd, [Xn, x27]"], fastpath_64b=["ldr Xd, [Xn, x27]"],
+        force_slowpath=is_slowpath, immediate=0x32
+    )
     ld_thunk(f"qemu_ld_leq_{subtype}_mode3a", is_aligned=is_aligned, slowpath_helper="helper_le_ldq_mmu",
         fastpath_32b=["ldr Xd, [Xn, x27]"], fastpath_64b=["ldr Xd, [Xn, x27]"],
         force_slowpath=is_slowpath, immediate=0x3a
@@ -878,6 +869,14 @@ for subtype in ('aligned', 'unaligned', 'slowpath'):
     )
     
     # Special optimization for the most common modes.
+    st_thunk(f"qemu_st_ub_{subtype}_mode02", is_aligned=is_aligned, slowpath_helper="helper_ret_stb_mmu",
+        fastpath_32b=["strb Wd, [Xn, x27]"], fastpath_64b=["strb Wd, [Xn, x27]"],
+        force_slowpath=is_slowpath, immediate=0x02
+    )
+    st_thunk(f"qemu_st_leq_{subtype}_mode32", is_aligned=is_aligned, slowpath_helper="helper_le_stq_mmu",
+        fastpath_32b=["str Xd, [Xn, x27]"], fastpath_64b=["str Xd, [Xn, x27]"],
+        force_slowpath=is_slowpath, immediate=0x32
+    )
     st_thunk(f"qemu_st_leq_{subtype}_mode3a", is_aligned=is_aligned, slowpath_helper="helper_le_stq_mmu",
         fastpath_32b=["str Xd, [Xn, x27]"], fastpath_64b=["str Xd, [Xn, x27]"],
         force_slowpath=is_slowpath, immediate=0x3a
