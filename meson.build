@@ -283,6 +283,8 @@ if not get_option('tcg').disabled()
         'tcti_logical_gadgets.h',
         'tcti_extension_gadgets.c',
         'tcti_extension_gadgets.h',
+        'tcti_bitwise_gadgets.c',
+        'tcti_bitwise_gadgets.h',
         'tcti_byteswap_gadgets.c',
         'tcti_byteswap_gadgets.h',
         'tcti_qemu_ld_aligned_signed_le_gadgets.c',

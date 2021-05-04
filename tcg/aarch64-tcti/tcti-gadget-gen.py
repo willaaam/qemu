@@ -753,6 +753,64 @@ with_dnm("nand_i64", "and Xd, Xn, Xm", "mvn Xd, Xd")
 with_dnm("nor_i32",  "orr Wd, Wn, Wm", "mvn Wd, Wd")
 with_dnm("nor_i64",  "orr Xd, Xn, Xm", "mvn Xd, Xd")
 
+START_COLLECTION("bitwise")
+
+# Count leading zeroes, with a twist: QEMU requires us to provide
+# a default value for when the argument is 0.
+with_dnm("clz_i32",
+
+    # Perform the core CLZ into w26.
+    "clz w26, Wn",
+
+    # Check Wn to see if it was zero
+    "tst Wn, Wn",
+
+    # If it was zero, accept the argument provided in Wm.
+    # Otherwise, accept our result from w26.
+    "csel Wd, Wm, w26, eq"
+)
+with_dnm("clz_i64",
+
+    # Perform the core CLZ into w26.
+    "clz x26, Xn",
+
+    # Check Wn to see if it was zero
+    "tst Xn, Xn",
+
+    # If it was zero, accept the argument provided in Wm.
+    # Otherwise, accept our result from w26.
+    "csel Xd, Xm, x26, eq"
+)
+
+
+# Count trailing zeroes, with a twist: QEMU requires us to provide
+# a default value for when the argument is 0.
+with_dnm("ctz_i32",
+    # Reverse our bits before performing our actual clz.
+    "rbit w26, Wn",
+    "clz w26, w26",
+
+    # Check Wn to see if it was zero
+    "tst Wn, Wn",
+
+    # If it was zero, accept the argument provided in Wm.
+    # Otherwise, accept our result from w26.
+    "csel Wd, Wm, w26, eq"
+)
+with_dnm("ctz_i64",
+
+    # Perform the core CLZ into w26.
+    "rbit x26, Xn",
+    "clz x26, x26",
+
+    # Check Wn to see if it was zero
+    "tst Xn, Xn",
+
+    # If it was zero, accept the argument provided in Wm.
+    # Otherwise, accept our result from w26.
+    "csel Xd, Xm, x26, eq"
+)
+
 
 START_COLLECTION("extension")
 
@@ -763,6 +821,10 @@ math_dn("ext16s",     "sxth", source_is_wn=True)
 with_dn("ext16u",     "and Wd, Wn, #0xffff")
 with_dn("ext32s_i64", "sxtw Xd, Wn")
 with_dn("ext32u_i64", "mov Wd, Wn")
+
+# Numeric extraction.
+with_dn("extrl",      "mov Wd, Wn")
+with_dn("extrh",      "lsr Xd, Xn, #32")
 
 START_COLLECTION("byteswap")
 

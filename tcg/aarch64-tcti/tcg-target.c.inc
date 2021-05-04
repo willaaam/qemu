@@ -173,6 +173,8 @@ static TCGConstraintSetIndex tcg_target_op_def(TCGOpcode op)
     case INDEX_op_bswap32_i32:
     case INDEX_op_bswap32_i64:
     case INDEX_op_bswap64_i64:
+    case INDEX_op_extrl_i64_i32:
+    case INDEX_op_extrh_i64_i32:
         return C_O1_I1(r, r);
 
     case INDEX_op_st8_i32:
@@ -226,6 +228,10 @@ static TCGConstraintSetIndex tcg_target_op_def(TCGOpcode op)
     case INDEX_op_rotr_i64:
     case INDEX_op_setcond_i32:
     case INDEX_op_setcond_i64:
+    case INDEX_op_clz_i32:
+    case INDEX_op_clz_i64:
+    case INDEX_op_ctz_i32:
+    case INDEX_op_ctz_i64:
         return C_O1_I2(r, r, r);
 
     case INDEX_op_brcond_i32:
@@ -983,6 +989,14 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         tcg_out_binary_gadget(s, gadget_neg_i64, args[0], args[1]);
         break;
 
+    case INDEX_op_clz_i64:      /* Optional (TCG_TARGET_HAS_clz_i64). */
+        tcg_out_ternary_gadget(s, gadget_clz_i64, args[0], args[1], args[2]);
+        break;
+
+    case INDEX_op_ctz_i64:      /* Optional (TCG_TARGET_HAS_ctz_i64). */
+        tcg_out_ternary_gadget(s, gadget_ctz_i64, args[0], args[1], args[2]);
+        break;
+
     case INDEX_op_ext8s_i64:    /* Optional (TCG_TARGET_HAS_ext8s_i64). */
         tcg_out_binary_gadget(s, gadget_ext8s_i64, args[0], args[1]);
         break;
@@ -1011,8 +1025,24 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         tcg_out_binary_gadget(s, gadget_ext32u_i64, args[0], args[1]);
         break;
 
+    case INDEX_op_extrl_i64_i32:
+        tcg_out_binary_gadget(s, gadget_extrl, args[0], args[1]);
+        break;
+
+    case INDEX_op_extrh_i64_i32:
+        tcg_out_binary_gadget(s, gadget_extrh, args[0], args[1]);
+        break;
+
     case INDEX_op_neg_i32:      /* Optional (TCG_TARGET_HAS_neg_i32). */
         tcg_out_binary_gadget(s, gadget_neg_i32, args[0], args[1]);
+        break;
+
+    case INDEX_op_clz_i32:      /* Optional (TCG_TARGET_HAS_clz_i32). */
+        tcg_out_ternary_gadget(s, gadget_clz_i32, args[0], args[1], args[2]);
+        break;
+
+    case INDEX_op_ctz_i32:      /* Optional (TCG_TARGET_HAS_ctz_i32). */
+        tcg_out_ternary_gadget(s, gadget_ctz_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_not_i32:      /* Optional (TCG_TARGET_HAS_not_i32). */
