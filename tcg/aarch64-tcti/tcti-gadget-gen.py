@@ -594,6 +594,7 @@ simple("br",
     "ldr x28, [x28]"
 )
 
+
 # Exit from a translation buffer execution.
 simple("exit_tb",
 
@@ -645,17 +646,12 @@ for condition in ARCH_CONDITION_CODES:
         # Grab our immediate argument.
         "ldr x27, [x28], #8",
 
-        # Perform our comparison and conditional branch.
+        # Perform our comparison...
         "subs wzr, Wn, Wm",
-        f"b{condition} 1f",
 
-        "0:", # not taken
-           # Perform our end-of-instruction epilogue.
-            *EPILOGUE,
-
-        "1:" # taken
-            # Update our bytecode pointer to take the label.
-            "mov x28, x27"
+        # ... and our conditional branch, which selectively sets w28 (our "gadget pointer")
+        # to the new location, if required.
+        f"csel x28, x27, x28, {condition}"
     )
 
     # Branches iff a given comparison is true.
@@ -666,15 +662,10 @@ for condition in ARCH_CONDITION_CODES:
 
         # Perform our comparison and conditional branch.
         "subs xzr, Xn, Xm",
-        f"b{condition} 1f",
 
-        "0:", # not taken
-            # Perform our end-of-instruction epilogue.
-            *EPILOGUE,
-
-        "1:" # taken
-            # Update our bytecode pointer to take the label.
-            "mov x28, x27"
+        # ... and our conditional branch, which selectively sets w28 (our "gadget pointer")
+        # to the new location, if required.
+        f"csel x28, x27, x28, {condition}"
     )
 
 
@@ -749,12 +740,19 @@ math_dnm("eqv",  "eon")
 math_dnm("shl",  "lsl")
 math_dnm("shr",  "lsr")
 math_dnm("sar",  "asr")
+math_dnm("rotr", "ror")
 
 # AArch64 lacks a Rotate Left; so we instead rotate right by a negative.
-# TODO: validate this?
-#math_dnm("rotr", "ror")
-#with_dnm("rotl_i32", "neg w27, Wm", "ror Wd, Wn, w27")
-#with_dnm("rotl_i64", "neg x27, Xm", "ror Xd, Xn, x27")
+with_dnm("rotl_i32", "neg w27, Wm", "ror Wd, Wn, w27")
+with_dnm("rotl_i64", "neg w27, Wm", "ror Xd, Xn, x27")
+
+# We'll synthesize several instructions that don't exist; since it's still faster
+# to run these as gadgets.
+with_dnm("nand_i32", "and Wd, Wn, Wm", "mvn Wd, Wd")
+with_dnm("nand_i64", "and Xd, Xn, Xm", "mvn Xd, Xd")
+with_dnm("nor_i32",  "orr Wd, Wn, Wm", "mvn Wd, Wd")
+with_dnm("nor_i64",  "orr Xd, Xn, Xm", "mvn Xd, Xd")
+
 
 START_COLLECTION("extension")
 

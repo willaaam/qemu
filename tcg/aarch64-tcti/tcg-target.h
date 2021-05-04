@@ -55,8 +55,11 @@
 // weird psuedo-native bytecode. We'll indicate that we're intepreted.
 #define TCG_TARGET_INTERPRETER 1
 
+// Specify we'll handle direct jumps.
+#define TCG_TARGET_HAS_direct_jump      1
+
 //
-// Supported optional instructions.
+// Supported optional scalar instructions.
 //
 
 // Divs.
@@ -77,23 +80,27 @@
 #define TCG_TARGET_HAS_ext16u_i64       1
 #define TCG_TARGET_HAS_ext32u_i64       1
 
-// Logicals.
+// Negations.
 #define TCG_TARGET_HAS_neg_i32          1
 #define TCG_TARGET_HAS_not_i32          1
 #define TCG_TARGET_HAS_neg_i64          1
 #define TCG_TARGET_HAS_not_i64          1
 
+// Logicals.
 #define TCG_TARGET_HAS_andc_i32         1
 #define TCG_TARGET_HAS_orc_i32          1
 #define TCG_TARGET_HAS_eqv_i32          1
+#define TCG_TARGET_HAS_rot_i32          1
+#define TCG_TARGET_HAS_nand_i32         1
+#define TCG_TARGET_HAS_nor_i32          1
 #define TCG_TARGET_HAS_andc_i64         1
 #define TCG_TARGET_HAS_eqv_i64          1
 #define TCG_TARGET_HAS_orc_i64          1
+#define TCG_TARGET_HAS_rot_i64          1
+#define TCG_TARGET_HAS_nor_i64          1
+#define TCG_TARGET_HAS_nand_i64         1
 
-// We don't curretly support rotates, since AArch64 lacks ROL.
-// We'll fix this later.
-#define TCG_TARGET_HAS_rot_i32          0
-#define TCG_TARGET_HAS_rot_i64          0
+
 
 // Swaps.
 #define TCG_TARGET_HAS_bswap16_i32      1
@@ -102,9 +109,6 @@
 #define TCG_TARGET_HAS_bswap32_i64      1
 #define TCG_TARGET_HAS_bswap64_i64      1
 #define TCG_TARGET_HAS_MEMORY_BSWAP     1
-
-// Specify we'll handle direct jumps.
-#define TCG_TARGET_HAS_direct_jump      1
 
 //
 // Potential TODOs.
@@ -120,19 +124,16 @@
 #define TCG_TARGET_HAS_extract_i64      0
 #define TCG_TARGET_HAS_sextract_i64     0
 
-// TODO: it might be worth writing a gadget for this
-#define TCG_TARGET_HAS_movcond_i32      0
-#define TCG_TARGET_HAS_movcond_i64      0
+
+//
+// Supported optional vector instructions.
+//
+
+// TODO!
 
 //
 // Unsupported instructions.
 //
-
-// ARMv8 doesn't have instructions for NAND/NOR.
-#define TCG_TARGET_HAS_nand_i32         0
-#define TCG_TARGET_HAS_nor_i32          0
-#define TCG_TARGET_HAS_nor_i64          0
-#define TCG_TARGET_HAS_nand_i64         0
 
 // aarch64's CLZ is implemented without a condition, so it
 #define TCG_TARGET_HAS_clz_i32          0
@@ -142,19 +143,24 @@
 #define TCG_TARGET_HAS_ctz_i64          0
 #define TCG_TARGET_HAS_ctpop_i64        0
 
+// We don't currently support gadgets with more than three arguments,
+// so we can't yet create movcond gadgets.
+#define TCG_TARGET_HAS_movcond_i32      0
+#define TCG_TARGET_HAS_movcond_i64      0
 
-// GOTO_PTR is too complex to emit a simple gadget for.
-// We'll let C handle it, since the overhead is similar.
+// GOTO_PTR is too complex to emit a simple gadget for, since it can
+// target either interpreted code or our non-existent epilogue.
 #define TCG_TARGET_HAS_goto_ptr         0
 
-// We don't have a simple gadget for this, since we're always assuming softmmu.
-#define TCG_TARGET_HAS_qemu_st8_i32     0
-
-// No AArch64 equivalent.a
+// No AArch64 equivalent.
 #define TCG_TARGET_HAS_extrl_i64_i32    0
 #define TCG_TARGET_HAS_extrh_i64_i32    0
 
-#define TCG_TARGET_HAS_extract2_i64     0
+// This operation exists specifically to allow us to provide differing register
+// constraints for 8-bit loads and stores. We don't need to do so, so we'll leave
+// this unimplemented, as we gain nothing by it.
+#define TCG_TARGET_HAS_qemu_st8_i32     0
+
 
 // These should always be zero on our 64B platform.
 #define TCG_TARGET_HAS_muls2_i64        0
@@ -170,6 +176,7 @@
 #define TCG_TARGET_HAS_muls2_i32        0
 #define TCG_TARGET_HAS_muluh_i32        0
 #define TCG_TARGET_HAS_mulsh_i32        0
+#define TCG_TARGET_HAS_extract2_i64     0
 
 //
 // Platform metadata.

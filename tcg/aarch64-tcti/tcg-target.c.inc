@@ -54,7 +54,7 @@
 
 /**
  * Macro that defines a look-up tree for named QEMU_LD gadgets.
- */ 
+ */
 #define LD_MEMOP_LOOKUP(variable, arg, suffix) \
     switch (get_memop(arg) & (MO_BSWAP | MO_SSIZE)) { \
         case MO_UB:   variable = gadget_qemu_ld_ub_   ## suffix; break; \
@@ -83,7 +83,7 @@
 
 /**
  * Macro that defines a look-up tree for named QEMU_ST gadgets.
- */ 
+ */
 #define ST_MEMOP_LOOKUP(variable, arg, suffix) \
     switch (get_memop(arg) & (MO_BSWAP | MO_SSIZE)) { \
         case MO_UB:   variable = gadget_qemu_st_ub_   ## suffix; break; \
@@ -435,11 +435,11 @@ static void tcg_out_ternary_gadget(TCGContext *s, const void *gadget_base[TCG_TA
 /**
  * Version of our LDST generator that defers to more optimized gadgets selectively.
  */
-static void tcg_out_ldst_gadget_inner(TCGContext *s, 
-    const void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], 
-    const void *gadget_pos_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
-    const void *gadget_shifted_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
-    const void *gadget_neg_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+static void tcg_out_ldst_gadget_inner(TCGContext *s,
+    const void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS],
+    const void *gadget_pos_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN],
+    const void *gadget_shifted_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN],
+    const void *gadget_neg_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN],
     unsigned reg0, unsigned reg1, uint32_t offset)
 {
     int64_t extended_offset = (int32_t)offset;
@@ -450,7 +450,7 @@ static void tcg_out_ldst_gadget_inner(TCGContext *s,
 
     // We handle positive and negative gadgets separately, in order to allow for asymmetrical
     // collections of pre-made gadgets.
-    if (!is_negative) 
+    if (!is_negative)
     {
         uint64_t shifted_offset = (extended_offset >> 3);
         bool aligned_to_8B = ((extended_offset & 0b111) == 0);
@@ -462,7 +462,7 @@ static void tcg_out_ldst_gadget_inner(TCGContext *s,
         if (have_optimized_gadget) {
             tcg_out_nullary_gadget(s, gadget_pos_imm[reg0][reg1][extended_offset]);
             return;
-        } 
+        }
 
         // Special case: it's frequent to have low-numbered positive offsets that are aligned
         // to 16B boundaries
@@ -470,7 +470,7 @@ static void tcg_out_ldst_gadget_inner(TCGContext *s,
             tcg_out_nullary_gadget(s, gadget_shifted_imm[reg0][reg1][shifted_offset]);
             return;
         }
-    } 
+    }
     else {
         uint64_t negated_offset = -(extended_offset);
 
@@ -532,14 +532,14 @@ static void tcg_out_movi_i32(TCGContext *s, TCGReg t0, tcg_target_long arg)
 
     // We handle positive and negative gadgets separately, in order to allow for asymmetrical
     // collections of pre-made gadgets.
-    if (!is_negative) 
+    if (!is_negative)
     {
         // More optimal case: we have a gadget that directly encodes the argument.
         if (arg < ARRAY_SIZE(gadget_movi_imm_i32[t0])) {
             tcg_out_nullary_gadget(s, gadget_movi_imm_i32[t0][arg]);
             return;
         }
-    } 
+    }
     else {
 
     }
@@ -556,14 +556,14 @@ static void tcg_out_movi_i64(TCGContext *s, TCGReg t0, tcg_target_long arg)
 
     // We handle positive and negative gadgets separately, in order to allow for asymmetrical
     // collections of pre-made gadgets.
-    if (!is_negative) 
+    if (!is_negative)
     {
         // More optimal case: we have a gadget that directly encodes the argument.
         if (arg < ARRAY_SIZE(gadget_movi_imm_i64[t0])) {
             tcg_out_nullary_gadget(s, gadget_movi_imm_i64[t0][arg]);
             return;
         }
-    } 
+    }
     else {
 
     }
@@ -605,9 +605,9 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
 {
 
     if (type == TCG_TYPE_I32) {
-        tcg_out_ldst_gadget(s, gadget_ld32u, ret, arg1, arg2); 
+        tcg_out_ldst_gadget(s, gadget_ld32u, ret, arg1, arg2);
     } else {
-        tcg_out_ldst_gadget(s, gadget_ld_i64, ret, arg1, arg2); 
+        tcg_out_ldst_gadget(s, gadget_ld_i64, ret, arg1, arg2);
     }
 }
 
@@ -719,41 +719,41 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
 
     case INDEX_op_ld8u_i32:
     case INDEX_op_ld8u_i64:
-        tcg_out_ldst_gadget(s, gadget_ld8u, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_ld8u, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_ld8s_i32:
-        tcg_out_ldst_gadget(s, gadget_ld8s_i32, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_ld8s_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_ld8s_i64:
-        tcg_out_ldst_gadget(s, gadget_ld8s_i64, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_ld8s_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_ld16u_i32:
     case INDEX_op_ld16u_i64:
-        tcg_out_ldst_gadget(s, gadget_ld16u, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_ld16u, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_ld16s_i32:
-        tcg_out_ldst_gadget(s, gadget_ld16s_i32, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_ld16s_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_ld16s_i64:
-        tcg_out_ldst_gadget(s, gadget_ld16s_i64, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_ld16s_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_ld_i32:
     case INDEX_op_ld32u_i64:
-        tcg_out_ldst_gadget(s, gadget_ld32u, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_ld32u, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_ld_i64:
-        tcg_out_ldst_gadget(s, gadget_ld_i64, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_ld_i64, args[0], args[1], args[2]);
         break;
-    
+   
     case INDEX_op_ld32s_i64:
-        tcg_out_ldst_gadget(s, gadget_ld32s_i64, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_ld32s_i64, args[0], args[1], args[2]);
         break;
 
 
@@ -762,155 +762,169 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
      */
     case INDEX_op_st8_i32:
     case INDEX_op_st8_i64:
-        tcg_out_ldst_gadget(s, gadget_st8, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_st8, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_st16_i32:
     case INDEX_op_st16_i64:
-        tcg_out_ldst_gadget(s, gadget_st16, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_st16, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_st_i32:
     case INDEX_op_st32_i64:
-        tcg_out_ldst_gadget(s, gadget_st_i32, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_st_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_st_i64:
-        tcg_out_ldst_gadget(s, gadget_st_i64, args[0], args[1], args[2]); 
+        tcg_out_ldst_gadget(s, gadget_st_i64, args[0], args[1], args[2]);
         break;
 
     /**
      * Arithmetic instructions.
      */
 
-    case INDEX_op_add_i32: 
-        tcg_out_ternary_gadget(s, gadget_add_i32, args[0], args[1], args[2]); 
+    case INDEX_op_add_i32:
+        tcg_out_ternary_gadget(s, gadget_add_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_sub_i32:
-        tcg_out_ternary_gadget(s, gadget_sub_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_sub_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_mul_i32:
-        tcg_out_ternary_gadget(s, gadget_mul_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_mul_i32, args[0], args[1], args[2]);
+        break;
+
+    case INDEX_op_nand_i32:     /* Optional (TCG_TARGET_HAS_nand_i32). */
+        tcg_out_ternary_gadget(s, gadget_nand_i32, args[0], args[1], args[2]);
+        break;
+
+    case INDEX_op_nor_i32:     /* Optional (TCG_TARGET_HAS_nor_i32). */
+        tcg_out_ternary_gadget(s, gadget_nor_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_and_i32:
-        tcg_out_ternary_gadget(s, gadget_and_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_and_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_andc_i32:     /* Optional (TCG_TARGET_HAS_andc_i32). */
-        tcg_out_ternary_gadget(s, gadget_andc_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_andc_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_orc_i32:      /* Optional (TCG_TARGET_HAS_orc_i64). */
-        tcg_out_ternary_gadget(s, gadget_orc_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_orc_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_eqv_i32:      /* Optional (TCG_TARGET_HAS_orc_i64). */
-        tcg_out_ternary_gadget(s, gadget_eqv_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_eqv_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_or_i32:
-        tcg_out_ternary_gadget(s, gadget_or_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_or_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_xor_i32:
-        tcg_out_ternary_gadget(s, gadget_xor_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_xor_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_shl_i32:
-        tcg_out_ternary_gadget(s, gadget_shl_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_shl_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_shr_i32:
-        tcg_out_ternary_gadget(s, gadget_shr_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_shr_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_sar_i32:
-        tcg_out_ternary_gadget(s, gadget_sar_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_sar_i32, args[0], args[1], args[2]);
         break;
 
-    //case INDEX_op_rotr_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
-    //    tcg_out_ternary_gadget(s, gadget_rotr_i32, args[0], args[1], args[2]); 
-    //    break;
+    case INDEX_op_rotr_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
+        tcg_out_ternary_gadget(s, gadget_rotr_i32, args[0], args[1], args[2]);
+        break;
 
-    //case INDEX_op_rotl_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
-    //    tcg_out_ternary_gadget(s, gadget_rotl_i32, args[0], args[1], args[2]); 
+    case INDEX_op_rotl_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
+        tcg_out_ternary_gadget(s, gadget_rotl_i32, args[0], args[1], args[2]);
+        break;
 
     case INDEX_op_add_i64:
-        tcg_out_ternary_gadget(s, gadget_add_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_add_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_sub_i64:
-        tcg_out_ternary_gadget(s, gadget_sub_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_sub_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_mul_i64:
-        tcg_out_ternary_gadget(s, gadget_mul_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_mul_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_and_i64:
-        tcg_out_ternary_gadget(s, gadget_and_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_and_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_andc_i64:     /* Optional (TCG_TARGET_HAS_andc_i64). */
-        tcg_out_ternary_gadget(s, gadget_andc_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_andc_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_orc_i64:      /* Optional (TCG_TARGET_HAS_orc_i64). */
-        tcg_out_ternary_gadget(s, gadget_orc_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_orc_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_eqv_i64:      /* Optional (TCG_TARGET_HAS_eqv_i64). */
-        tcg_out_ternary_gadget(s, gadget_eqv_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_eqv_i64, args[0], args[1], args[2]);
         break;
 
-    //case INDEX_op_nand_i64:     /* Optional (TCG_TARGET_HAS_nand_i64). */
-    //case INDEX_op_nor_i64:      /* Optional (TCG_TARGET_HAS_nor_i64). */
+    case INDEX_op_nand_i64:     /* Optional (TCG_TARGET_HAS_nand_i64). */
+        tcg_out_ternary_gadget(s, gadget_nand_i64, args[0], args[1], args[2]);
+        break;
+
+    case INDEX_op_nor_i64:      /* Optional (TCG_TARGET_HAS_nor_i64). */
+        tcg_out_ternary_gadget(s, gadget_nor_i64, args[0], args[1], args[2]);
+        break;
 
     case INDEX_op_or_i64:
-        tcg_out_ternary_gadget(s, gadget_or_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_or_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_xor_i64:
-        tcg_out_ternary_gadget(s, gadget_xor_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_xor_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_shl_i64:
-        tcg_out_ternary_gadget(s, gadget_shl_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_shl_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_shr_i64:
-        tcg_out_ternary_gadget(s, gadget_shr_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_shr_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_sar_i64:
-        tcg_out_ternary_gadget(s, gadget_sar_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_sar_i64, args[0], args[1], args[2]);
         break;
 
-    //case INDEX_op_rotl_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
-    //    tcg_out_ternary_gadget(s, gadget_rotl_i64, args[0], args[1], args[2]); 
-    //    break;
+    case INDEX_op_rotl_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
+        tcg_out_ternary_gadget(s, gadget_rotl_i64, args[0], args[1], args[2]);
+        break;
 
-    //case INDEX_op_rotr_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
-    //    tcg_out_ternary_gadget(s, gadget_rotr_i64, args[0], args[1], args[2]); 
-    //    break;
+    case INDEX_op_rotr_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
+        tcg_out_ternary_gadget(s, gadget_rotr_i64, args[0], args[1], args[2]);
+        break;
 
     case INDEX_op_div_i64:      /* Optional (TCG_TARGET_HAS_div_i64). */
-        tcg_out_ternary_gadget(s, gadget_div_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_div_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_divu_i64:     /* Optional (TCG_TARGET_HAS_div_i64). */
-        tcg_out_ternary_gadget(s, gadget_divu_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_divu_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_rem_i64:      /* Optional (TCG_TARGET_HAS_div_i64). */
-        tcg_out_ternary_gadget(s, gadget_rem_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_rem_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_remu_i64:     /* Optional (TCG_TARGET_HAS_div_i64). */
-        tcg_out_ternary_gadget(s, gadget_remu_i64, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_remu_i64, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_brcond_i64:
@@ -1014,19 +1028,19 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         break;
 
     case INDEX_op_div_i32:      /* Optional (TCG_TARGET_HAS_div_i32). */
-        tcg_out_ternary_gadget(s, gadget_div_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_div_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_divu_i32:     /* Optional (TCG_TARGET_HAS_div_i32). */
-        tcg_out_ternary_gadget(s, gadget_divu_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_divu_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_rem_i32:      /* Optional (TCG_TARGET_HAS_div_i32). */
-        tcg_out_ternary_gadget(s, gadget_rem_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_rem_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_remu_i32:     /* Optional (TCG_TARGET_HAS_div_i32). */
-        tcg_out_ternary_gadget(s, gadget_remu_i32, args[0], args[1], args[2]); 
+        tcg_out_ternary_gadget(s, gadget_remu_i32, args[0], args[1], args[2]);
         break;
 
     case INDEX_op_brcond_i32:
@@ -1081,7 +1095,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         }
 
         // Args:
-        // - an immediate32 encodes our operation index 
+        // - an immediate32 encodes our operation index
         tcg_out_binary_gadget(s, gadget, args[0], args[1]);
         tcg_out64(s, args[2]); // TODO: fix encoding to be 4b
         break;
@@ -1095,7 +1109,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
 
         void *gadget;
 
-        // Special optimization case: if we have an common case. 
+        // Special optimization case: if we have an common case.
         // Delegate to our special-case handler.
         if (args[2] == 0x02) {
             LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], ld_ub, mode02)
@@ -1119,7 +1133,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
             }
 
             // Args:
-            // - an immediate32 encodes our operation index 
+            // - an immediate32 encodes our operation index
             tcg_out_binary_gadget(s, gadget, args[0], args[1]);
             tcg_out64(s, args[2]); // TODO: fix encoding to be 4b
         }
@@ -1146,7 +1160,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
 
         // Args:
         // - our gadget encodes the target and address registers
-        // - an immediate32 encodes our operation index 
+        // - an immediate32 encodes our operation index
         tcg_out_binary_gadget(s, gadget, args[0], args[1]);
         tcg_out64(s, args[2]); // FIXME: double encoded
         break;
@@ -1160,7 +1174,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
 
         void *gadget;
 
-        // Special optimization case: if we have an common case. 
+        // Special optimization case: if we have an common case.
         // Delegate to our special-case handler.
         if (args[2] == 0x02) {
             LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], st_ub, mode02)
@@ -1185,7 +1199,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
 
             // Args:
             // - our gadget encodes the target and address registers
-            // - an immediate32 encodes our operation index 
+            // - an immediate32 encodes our operation index
             tcg_out_binary_gadget(s, gadget, args[0], args[1]);
             tcg_out64(s, args[2]); // FIXME: double encoded
         }
@@ -1223,9 +1237,9 @@ static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg, TCGReg arg1,
                        intptr_t arg2)
 {
     if (type == TCG_TYPE_I32) {
-        tcg_out_ldst_gadget(s, gadget_st_i32, arg, arg1, arg2); 
+        tcg_out_ldst_gadget(s, gadget_st_i32, arg, arg1, arg2);
     } else {
-        tcg_out_ldst_gadget(s, gadget_st_i64, arg, arg1, arg2); 
+        tcg_out_ldst_gadget(s, gadget_st_i64, arg, arg1, arg2);
     }
 }
 
@@ -1314,8 +1328,8 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
 
         : [return_value] "=m" (return_value)
 
-        : [areg0]        "m"  (env), 
-          [sp_value]     "m"  (sp_value), 
+        : [areg0]        "m"  (env),
+          [sp_value]     "m"  (sp_value),
           [start_tb_ptr] "m"  (v_tb_ptr),
           [pc_mirror]    "m"  (pc_mirror)
 
