@@ -317,6 +317,12 @@ if not get_option('tcg').disabled()
         'tcti_qemu_st_unaligned_be_gadgets.h',
         'tcti_qemu_st_slowpath_be_gadgets.c',
         'tcti_qemu_st_slowpath_be_gadgets.h',
+        'tcti_simd_base_gadgets.c',
+        'tcti_simd_base_gadgets.h',
+        'tcti_simd_arithmetic_gadgets.c',
+        'tcti_simd_arithmetic_gadgets.h',
+        'tcti_simd_logical_gadgets.c',
+        'tcti_simd_logical_gadgets.h',
     ]
     tcti_gadgets = custom_target('tcti-gadgets.h',
                               output: tcti_sources,

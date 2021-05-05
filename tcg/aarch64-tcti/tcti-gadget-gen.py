@@ -25,6 +25,9 @@ TCG_REGISTER_NUMBERS = list(range(TCG_REGISTER_COUNT))
 # Helper that provides each of the AArch64 condition codes of interest.
 ARCH_CONDITION_CODES = ["eq", "ne", "lt", "ge", "le", "gt", "lo", "hs", "ls", "hi"]
 
+# The list of vector size codes supported on this platform.
+VECTOR_SIZES = ['16b', '8b', '4h', '8h', '2s', '4s', '2d']
+
 # We'll create a variety of gadgets that assume the MMU's TLB is stored at certain
 # offsets into its structure. These should match the offsets in tcg-target.c.in.
 QEMU_ALLOWED_MMU_OFFSETS = [ 32, 48, 64, 96, 128 ]
@@ -109,8 +112,29 @@ def simple(name, *lines, export=True):
     print("}\n", file=c_file)
 
 
+
+
+
+
+
 def with_register_substitutions(name, substitutions, *lines, immediate_range=range(0)):
     """ Generates a collection of gadgtes with register substitutions. """
+
+    def _expand_op1_immediate(num):
+        """ Gets a uncompressed bitfield argument for a given immediate; for NEON instructions. 
+        
+        Duplciates each bit eight times; converting 0b0100 to 0x00FF0000.
+        """
+
+        # Get the number as a binary string...
+        binstring = bin(num)[2:]
+
+        # ... expand out the values to hex...
+        hex_string = binstring.replace('1', 'FF').replace('0', '00') 
+
+        # ... and return out the new constant.
+        return f"0x{hex_string}"
+
 
     def substitutions_for_letter(letter, number, line):
         """ Helper that transforms Wd => w1, implementing gadget substitutions. """
@@ -119,8 +143,16 @@ def with_register_substitutions(name, substitutions, *lines, immediate_range=ran
         line = line.replace(f"X{letter}", f"x{number}")
         line = line.replace(f"W{letter}", f"w{number}")
 
-        # ... immediate substitutions.
+        # ... vector register substitutions...
+        line = line.replace(f"V{letter}", f"v{number + 16}")
+        line = line.replace(f"D{letter}", f"d{number + 16}")
+        line = line.replace(f"Q{letter}", f"q{number + 16}")
+
+        # ... regular immediate substitutions...
         line = line.replace(f"I{letter}", f"{number}")
+
+        # ... and compressed immediate substitutions.
+        line = line.replace(f"S{letter}", f"{_expand_op1_immediate(number)}")
         return line
 
         
@@ -558,6 +590,63 @@ def st_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, 
             )
 
 
+
+def vector_dn(name, *lines):
+    """ Creates a set of gadgets for every size of a given vector op. Accepts 'S' as a size placeholder. """
+
+    def do_size_replacement(line, size):
+        line = line.replace(".S", f".{size}")
+        
+        # If this size requires a 32b register, replace Wd with Xd.
+        if size == "2d":
+            line = line.replace("Wn", "Xn")
+
+        return line
+
+
+    # Create a variant for each size, replacing any placeholders.
+    for size in VECTOR_SIZES:
+        sized_lines = (do_size_replacement(line, size) for line in lines)
+        with_dn(f"{name}_{size}", *sized_lines)
+
+
+def vector_dnm(name, *lines, scalar=None, omit_sizes=()):
+    """ Creates a set of gadgets for every size of a given vector op. Accepts 'S' as a size placeholder. """
+
+    def do_size_replacement(line, size):
+        return line.replace(".S", f".{size}")
+        
+    # Create a variant for each size, replacing any placeholders.
+    for size in VECTOR_SIZES:
+        if size in omit_sizes:
+            continue
+
+        sized_lines = (do_size_replacement(line, size) for line in lines)
+        with_dnm(f"{name}_{size}", *sized_lines)
+
+    if scalar:
+        if isinstance(scalar, str):
+            sized_lines = (scalar,)
+        with_dnm(f"{name}_scalar", *sized_lines)
+
+
+def vector_math_dnm(name, operation):
+    """ Generates a collection of gadgets for vector math instructions. """
+    vector_dnm(name, f"{operation} Vd.S, Vn.S, Vm.S", scalar=f"{operation} Dd, Dn, Dm")
+
+
+def vector_logic_dn(name, operation):
+    """ Generates a pair of gadgets for vector bitwise logic instructions. """
+    with_dn(f"{name}_d", f"{operation} Vd.8b, Vn.8b")
+    with_dn(f"{name}_q", f"{operation} Vd.16b, Vn.16b")
+
+
+def vector_logic_dnm(name, operation):
+    """ Generates a pair of gadgets for vector bitwise logic instructions. """
+    with_dnm(f"{name}_d", f"{operation} Vd.8b, Vn.8b, Vm.8b")
+    with_dnm(f"{name}_q", f"{operation} Vd.16b, Vn.16b, Vm.16b")
+
+
 #
 # Gadget definitions.
 #
@@ -953,6 +1042,86 @@ for subtype in ('aligned', 'unaligned', 'slowpath'):
             is_aligned=is_aligned, force_slowpath=is_slowpath)
 
 
+#
+# SIMD/Vector ops
+#
+
+# SIMD MOVI instructions.
+START_COLLECTION(f"simd_base")
+
+# Unoptimized/unoptimizable load of a vector64; grabbing an immediate.
+with_d("ldi_d", "ldr Dd, [x28], #8")
+with_d("ldi_q", "ldr Qd, [x28], #16")
+
+# General purpose reg -> vec rec loads
+vector_dn("dup", "dup Vd.S, Wn")
+
+# Memory -> vec reg loads.
+# The offset of the load is stored in a 64b immediate.
+
+# Duplicating load.
+# TODO: possibly squish the add into the ld1r, if that's valid?
+vector_dn("dupm", "ldr x27, [x28], #8", "add x27, x27, Xn", "ld1r {Vd.S}, [x27]")
+
+# Direct loads.
+with_dn("ldr_d",  "ldr x27, [x28], #8", "ldr Dd, [Xn, x27]")
+with_dn("ldr_q",  "ldr x27, [x28], #8", "ldr Qd, [Xn, x27]")
+
+# vec -> reg stores.
+# The offset of the stores is stored in a 64b immediate.
+with_dn("str_d",  "ldr x27, [x28], #8", "str Dd, [Xn, x27]")
+with_dn("str_q",  "ldr x27, [x28], #8", "str Qd, [Xn, x27]")
+
+
+START_COLLECTION(f"simd_arithmetic")
+
+vector_math_dnm("add",   "add")
+vector_math_dnm("usadd", "uqadd")
+vector_math_dnm("ssadd", "sqadd")
+vector_math_dnm("sub",   "sub")
+vector_math_dnm("ussub", "uqsub")
+vector_math_dnm("sssub", "sqsub")
+vector_dnm("mul", "mul Vd.S, Vn.S, Vm.S", omit_sizes=("2d",))
+
+START_COLLECTION(f"simd_logical")
+
+vector_logic_dnm("and",  "and")
+vector_logic_dnm("andc", "bic")
+vector_logic_dnm("or",   "orr")
+vector_logic_dnm("orc",  "orn")
+vector_logic_dnm("xor",  "eor")
+vector_logic_dn( "not",  "not")
+vector_dn("neg", "neg Vd.S, Vn.S")
+vector_dn("abs", "abs Vd.S, Vn.S")
+
+
+"""
+START_COLLECTION(f"simd_dupi_optimizations")
+
+# Simple imm8 movs...
+with_d_immediate("movi_cmode_e_op0_q0",  "mov Vd.8b, #Ii",          immediate_range=range(256))
+with_d_immediate("movi_cmode_e_op0_q1",  "mov Vd.16b, #Ii",         immediate_range=range(256))
+
+# ... all 00/FF movs...
+with_d_immediate("movi_cmode_e_op1_q0",  "mov Dd, #Si",             immediate_range=range(256))
+with_d_immediate("movi_cmode_e_op1_q1",  "mov Vd.2d, #Si",          immediate_range=range(256))
+
+# Halfword MOVs.
+with_d_immediate("movi_cmode_8_op0_q0",  "movi v0.4h, #Ii",         immediate_range=range(256))
+with_d_immediate("movi_cmode_8_op0_q1",  "movi v0.8h, #Ii",         immediate_range=range(256))
+with_d_immediate("movi_cmode_8_op0_q0",  "mvni v0.4h, #Ii",         immediate_range=range(256))
+with_d_immediate("movi_cmode_8_op0_q1",  "mvni v0.8h, #Ii",         immediate_range=range(256))
+with_d_immediate("movi_cmode_a_op0_q0",  "movi v0.4h, #Ii, lsl #8", immediate_range=range(256))
+with_d_immediate("movi_cmode_a_op0_q1",  "movi v0.8h, #Ii, lsl #8", immediate_range=range(256))
+with_d_immediate("movi_cmode_a_op0_q0",  "mvni v0.4h, #Ii, lsl #8", immediate_range=range(256))
+with_d_immediate("movi_cmode_a_op0_q1",  "mvni v0.8h, #Ii, lsl #8", immediate_range=range(256))
+
+# Halfword ORIs, for building complex MOVs.
+with_d_immediate("movi_orr_a_op0_q0",    "orr v0.4h, #Ii, lsl #8", immediate_range=range(256))
+with_d_immediate("movi_orr_a_op0_q1",    "orr v0.8h, #Ii, lsl #8", immediate_range=range(256))
+"""
+
+
 # Print a list of output files generated.
 output_c_filenames = (f"'tcti_{name}_gadgets.c'" for name in output_files.keys())
 output_h_filenames = (f"'tcti_{name}_gadgets.h'" for name in output_files.keys())
@@ -962,10 +1131,10 @@ print(f"gadgets = [",          file=sys.stderr)
 print("      tcti_gadgets.h,", file=sys.stderr)
 
 for name in output_files.keys():
-    print(f"      tcti_{name}_gadgets.c,", file=sys.stderr)
-    print(f"      tcti_{name}_gadgets.h,", file=sys.stderr)
+    print(f"      'tcti_{name}_gadgets.c',", file=sys.stderr)
+    print(f"      'tcti_{name}_gadgets.h',", file=sys.stderr)
 
 print(f"]", file=sys.stderr)
 
 # Statistics.
-sys.stderr.write(f"\nGenerated {gadgets} gadgets with {instructions} instructions ({instructions * 4} B).\n\n")
+sys.stderr.write(f"\nGenerated {gadgets} gadgets with {instructions} instructions (~{(instructions * 4) // 1024 // 1024} B).\n\n")
