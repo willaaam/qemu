@@ -12,4 +12,3 @@
  */
 
 DEF(aa64_sshl_vec, 1, 2, 0, IMPLVEC)
-DEF(aa64_sli_vec, 1, 2, 1, IMPLVEC)

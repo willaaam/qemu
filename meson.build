@@ -323,6 +323,8 @@ if not get_option('tcg').disabled()
         'tcti_simd_arithmetic_gadgets.h',
         'tcti_simd_logical_gadgets.c',
         'tcti_simd_logical_gadgets.h',
+        'tcti_simd_immediate_gadgets.c',
+        'tcti_simd_immediate_gadgets.h',
     ]
     tcti_gadgets = custom_target('tcti-gadgets.h',
                               output: tcti_sources,

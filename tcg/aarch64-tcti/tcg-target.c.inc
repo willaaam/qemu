@@ -207,8 +207,6 @@ static TCGConstraintSetIndex tcg_target_op_def(TCGOpcode op)
         return C_O1_I2(w, w, w);
     case INDEX_op_bitsel_vec:
         return C_O1_I3(w, w, w, w);
-    case INDEX_op_aa64_sli_vec:
-        return C_O1_I2(w, 0, w);
 
     default:
         g_assert_not_reached();
@@ -581,22 +579,75 @@ static void tcti_out_label(TCGContext *s, TCGLabel *label)
     }
 }
 
-/**
- * Generate a register-to-register MOV.
- */
+
+/* Register to register move using ORR (shifted register with no shift). */
+static void tcg_out_movr(TCGContext *s, TCGType ext, TCGReg rd, TCGReg rm)
+{
+    switch(ext) {
+        case TCG_TYPE_I32:
+            tcg_out_binary_gadget(s, gadget_mov_i32, rd, rm);
+            break;
+
+        case TCG_TYPE_I64:
+            tcg_out_binary_gadget(s, gadget_mov_i64, rd, rm);
+            break;
+
+        default:
+            g_assert_not_reached();
+
+    }
+}
+
+
 static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg)
 {
-    tcg_debug_assert(ret != arg);
+    TCGReg w_ret = (ret - TCG_REG_V16);
+    TCGReg w_arg = (arg - TCG_REG_V16);
 
-    if (type == TCG_TYPE_I32) {
-        tcg_out_binary_gadget(s, gadget_mov_i32, ret, arg);
-    } else {
-        tcg_out_binary_gadget(s, gadget_mov_i64, ret, arg);
+    if (ret == arg) {
+        return true;
     }
 
+    switch (type) {
+    case TCG_TYPE_I32:
+    case TCG_TYPE_I64:
 
+        // If this is a GP to GP register mov, issue our standard MOV.
+        if (ret < 32 && arg < 32) {
+            tcg_out_movr(s, type, ret, arg);
+            break;
+        } 
+        // If this is a vector register to GP, issue a UMOV.
+        else if (ret < 32) {
+            void *gadget = (type == TCG_TYPE_I32) ? gadget_umov_s0 : gadget_umov_d0;
+            tcg_out_binary_gadget(s, gadget, ret, w_arg);
+            break;
+        } 
+        
+        // If this is a GP to vector move, insert the vealue using INS.
+        else if (arg < 32) {
+            void *gadget = (type == TCG_TYPE_I32) ? gadget_ins_s0 : gadget_ins_d0;
+            tcg_out_binary_gadget(s, gadget, w_ret, arg);
+            break;
+        }
+        /* FALLTHRU */
+
+    case TCG_TYPE_V64:
+        tcg_debug_assert(ret >= 32 && arg >= 32);
+        tcg_out_ternary_gadget(s, gadget_or_d, w_ret, w_arg, w_arg);
+        break;
+
+    case TCG_TYPE_V128:
+        tcg_debug_assert(ret >= 32 && arg >= 32);
+        tcg_out_ternary_gadget(s, gadget_or_q, w_ret, w_arg, w_arg);
+        break;
+
+    default:
+        g_assert_not_reached();
+    }
     return true;
 }
+
 
 
 static void tcg_out_movi_i32(TCGContext *s, TCGReg t0, tcg_target_long arg)
@@ -612,9 +663,6 @@ static void tcg_out_movi_i32(TCGContext *s, TCGReg t0, tcg_target_long arg)
             tcg_out_gadget(s, gadget_movi_imm_i32[t0][arg]);
             return;
         }
-    }
-    else {
-
     }
 
     // Emit the mov and its immediate.
@@ -636,9 +684,6 @@ static void tcg_out_movi_i64(TCGContext *s, TCGReg t0, tcg_target_long arg)
             tcg_out_gadget(s, gadget_movi_imm_i64[t0][arg]);
             return;
         }
-    }
-    else {
-
     }
 
     // TODO: optimize the negative case, too?
@@ -1466,7 +1511,6 @@ static int tcg_target_const_match(tcg_target_long val, TCGType type,
 
 
 /* Return true if v16 is a valid 16-bit shifted immediate.  */
-/*
 static bool is_shimm16(uint16_t v16, int *cmode, int *imm8)
 {
     if (v16 == (v16 & 0xff)) {
@@ -1480,31 +1524,14 @@ static bool is_shimm16(uint16_t v16, int *cmode, int *imm8)
     }
     return false;
 }
-*/
 
-/* Return true if v64 is a valid float64 immediate.  */
-/*
-static bool is_fimm64(uint64_t v64, int *cmode, int *imm8)
-{
-    if (extract64(v64, 0, 48) == 0
-        && (extract64(v64, 54, 9) == 0x100
-            || extract64(v64, 54, 9) == 0x0ff)) {
-        *cmode = 0xf;
-        *imm8 = (extract64(v64, 63, 1) << 7)
-              | (extract64(v64, 54, 1) << 6)
-              | extract64(v64, 48, 6);
-        return true;
-    }
-    return false;
-}
-*/
 
 /** Core vector operation emission. */
 static void tcg_out_vec_op(TCGContext *s, TCGOpcode opc, unsigned vecl, unsigned vece,
     const TCGArg args[TCG_MAX_OP_ARGS], const int const_args[TCG_MAX_OP_ARGS])
 {
     TCGType type = vecl + TCG_TYPE_V64;
-    TCGArg r0, r1, r2, w0, w1, w2;
+    TCGArg r0, r1, r2, r3, w0, w1, w2, w3;
 
     // Typing flags for vector operations.
     bool is_v128 = (type == TCG_TYPE_V128);
@@ -1514,11 +1541,13 @@ static void tcg_out_vec_op(TCGContext *s, TCGOpcode opc, unsigned vecl, unsigned
     r0 = args[0];
     r1 = args[1];
     r2 = args[2];
+    r3 = args[3];
 
     // Offset argument shortcuts; offset to convert register numbers to gadget numberes.
     w0 = args[0] - TCG_REG_V16;
     w1 = args[1] - TCG_REG_V16;
     w2 = args[2] - TCG_REG_V16;
+    w3 = args[3] - TCG_REG_V16;
 
     // Argument shortcuts, as signed.
     int64_t signed_offset_arg = (int32_t)args[2];
@@ -1600,52 +1629,85 @@ static void tcg_out_vec_op(TCGContext *s, TCGOpcode opc, unsigned vecl, unsigned
         break;
 
     case INDEX_op_smax_vec:
-        TODO();
+        tcg_out_ternary_vector_gadget_no64(s, smax, vece, w0, w1, w2);
         break;
 
     case INDEX_op_smin_vec:
-        TODO();
+        tcg_out_ternary_vector_gadget_no64(s, smin, vece, w0, w1, w2);
         break;
 
     case INDEX_op_umax_vec:
-        TODO();
+        tcg_out_ternary_vector_gadget_no64(s, umax, vece, w0, w1, w2);
         break;
 
     case INDEX_op_umin_vec:
-        TODO();
+        tcg_out_ternary_vector_gadget_no64(s, umin, vece, w0, w1, w2);
         break;
 
     case INDEX_op_not_vec: // optional
         tcg_out_binary_dq_gadget(s, not, is_v128, w0, w1);
         break;
 
-    case INDEX_op_shli_vec:
-        TODO();
-        break;
-
-    case INDEX_op_shri_vec:
-        TODO();
-        break;
-
-    case INDEX_op_sari_vec:
-        TODO();
-        break;
-
-    case INDEX_op_aa64_sli_vec:
-        TODO();
-        break;
     case INDEX_op_shlv_vec:
-        TODO();
+        tcg_out_ternary_vector_gadget_with_scalar(s, shlv, is_scalar, vece, w0, w1, w2);
         break;
+
     case INDEX_op_aa64_sshl_vec:
-        TODO();
+        tcg_out_ternary_vector_gadget_with_scalar(s, sshl, is_scalar, vece, w0, w1, w2);
         break;
+
     case INDEX_op_cmp_vec:
-        TODO();
+        switch (args[3]) {
+            case TCG_COND_EQ:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmeq, is_scalar, vece, w0, w1, w2);
+                break;
+            case TCG_COND_NE:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmeq, is_scalar, vece, w0, w1, w2);
+                tcg_out_binary_dq_gadget(s, not, is_v128, w0, w0);
+                break;
+            case TCG_COND_GT:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmgt, is_scalar, vece, w0, w1, w2);
+                break;
+            case TCG_COND_LE:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmgt, is_scalar, vece, w0, w2, w1);
+                break;
+            case TCG_COND_GE:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmge, is_scalar, vece, w0, w1, w2);
+                break;
+            case TCG_COND_LT:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmge, is_scalar, vece, w0, w2, w1);
+                break;
+            case TCG_COND_GTU:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmhi, is_scalar, vece, w0, w1, w2);
+                break;
+            case TCG_COND_LEU:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmhi, is_scalar, vece, w0, w2, w1);
+                break;
+            case TCG_COND_GEU:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmhs, is_scalar, vece, w0, w1, w2);
+                break;
+            case TCG_COND_LTU:
+                tcg_out_ternary_vector_gadget_with_scalar(s, cmhs, is_scalar, vece, w0, w2, w1);
+                break;
+            default:
+                g_assert_not_reached();
+        }
         break;
+
     case INDEX_op_bitsel_vec: // optional
-        TODO();
+    {
+        if (r0 == r3) {
+            tcg_out_ternary_dq_gadget(s, bit, is_v128, w0, w2, w1);
+        } else if (r0 == r2) {
+            tcg_out_ternary_dq_gadget(s, bif, is_v128, w0, w3, w1);
+        } else {
+            if (r0 != r1) {
+                tcg_out_mov(s, type, r0, r1);
+            }
+            tcg_out_ternary_dq_gadget(s, bsl, is_v128, w0, w2, w3);
+        }
         break;
+    }
 
     case INDEX_op_mov_vec:  /* Always emitted via tcg_out_mov.  */
     case INDEX_op_dup_vec:  /* Always emitted via tcg_out_dup_vec.  */
@@ -1668,16 +1730,13 @@ int tcg_can_emit_vec_op(TCGOpcode opc, TCGType type, unsigned vece)
     case INDEX_op_neg_vec:
     case INDEX_op_abs_vec:
     case INDEX_op_not_vec:
-    //case INDEX_op_cmp_vec:
-    //case INDEX_op_shli_vec:
-    //case INDEX_op_shri_vec:
-    //case INDEX_op_sari_vec:
+    case INDEX_op_cmp_vec:
     case INDEX_op_ssadd_vec:
     case INDEX_op_sssub_vec:
     case INDEX_op_usadd_vec:
     case INDEX_op_ussub_vec:
-    //case INDEX_op_shlv_vec:
-    //case INDEX_op_bitsel_vec:
+    case INDEX_op_shlv_vec:
+    case INDEX_op_bitsel_vec:
         return 1;
     case INDEX_op_rotli_vec:
     case INDEX_op_shrv_vec:
@@ -1686,10 +1745,10 @@ int tcg_can_emit_vec_op(TCGOpcode opc, TCGType type, unsigned vece)
     case INDEX_op_rotrv_vec:
         return -1;
     case INDEX_op_mul_vec:
-    //case INDEX_op_smax_vec:
-    //case INDEX_op_smin_vec:
-    //case INDEX_op_umax_vec:
-    //case INDEX_op_umin_vec:
+    case INDEX_op_smax_vec:
+    case INDEX_op_smin_vec:
+    case INDEX_op_umax_vec:
+    case INDEX_op_umin_vec:
         return vece < MO_64;
 
     default:
@@ -1712,14 +1771,6 @@ void tcg_expand_vec_op(TCGOpcode opc, TCGType type, unsigned vece,
     va_end(va);
 
     switch (opc) {
-    case INDEX_op_rotli_vec:
-        t1 = tcg_temp_new_vec(type);
-        tcg_gen_shri_vec(vece, t1, v1, -a2 & ((8 << vece) - 1));
-        vec_gen_4(INDEX_op_aa64_sli_vec, type, vece,
-                  tcgv_vec_arg(v0), tcgv_vec_arg(t1), tcgv_vec_arg(v1), a2);
-        tcg_temp_free_vec(t1);
-        break;
-
     case INDEX_op_shrv_vec:
     case INDEX_op_sarv_vec:
         /* Right shifts are negative left shifts for AArch64.  */
@@ -1771,10 +1822,9 @@ void tcg_expand_vec_op(TCGOpcode opc, TCGType type, unsigned vece,
 
 
 /* Generate DUPI (move immediate) vector ops. */
-/*
 static bool tcg_out_optimized_dupi_vec(TCGContext *s, TCGType type, unsigned vece, TCGReg rd, int64_t v64)
 {
-    bool is_v128 = (type == TCG_TYPE_V128);
+    bool q = (type == TCG_TYPE_V128);
     int cmode, imm8, i;
 
     // If we're copying an 8b immediate, we implicitly have a simple gadget for this,
@@ -1871,14 +1921,10 @@ static bool tcg_out_optimized_dupi_vec(TCGContext *s, TCGType type, unsigned vec
     //        return;
     //    }
     //} 
-    
-    else if (is_fimm64(v64, &cmode, &imm8)) {
-        tcg_out_insn(s, 3606, MOVI, q, rd, 1, cmode, imm8);
-        return true;
-    }
 
+    return false;
 }
-*/
+
 
 /* Emits instructions that can load an immediate into a vector. */
 static void tcg_out_dupi_vec(TCGContext *s, TCGType type, unsigned vece, TCGReg rd, int64_t v64)
@@ -1887,11 +1933,9 @@ static void tcg_out_dupi_vec(TCGContext *s, TCGType type, unsigned vece, TCGReg 
     rd = rd - (TCG_REG_V16);
 
     // First, try to create an optimized implementation, if possible.
-    /*
     if (tcg_out_optimized_dupi_vec(s, type, vece, rd, v64)) {
         return;
     }
-    */
 
     // If we didn't, we'll need to load the full vector from memory.
     // Emit it into our bytecode stream as an immediate; which we'll then

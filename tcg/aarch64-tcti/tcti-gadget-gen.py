@@ -113,10 +113,6 @@ def simple(name, *lines, export=True):
 
 
 
-
-
-
-
 def with_register_substitutions(name, substitutions, *lines, immediate_range=range(0)):
     """ Generates a collection of gadgtes with register substitutions. """
 
@@ -635,6 +631,11 @@ def vector_math_dnm(name, operation):
     vector_dnm(name, f"{operation} Vd.S, Vn.S, Vm.S", scalar=f"{operation} Dd, Dn, Dm")
 
 
+def vector_math_dnm_no64(name, operation):
+    """ Generates a collection of gadgets for vector math instructions. """
+    vector_dnm(name, f"{operation} Vd.S, Vn.S, Vm.S", omit_sizes=('2d',))
+
+
 def vector_logic_dn(name, operation):
     """ Generates a pair of gadgets for vector bitwise logic instructions. """
     with_dn(f"{name}_d", f"{operation} Vd.8b, Vn.8b")
@@ -1056,6 +1057,15 @@ with_d("ldi_q", "ldr Qd, [x28], #16")
 # General purpose reg -> vec rec loads
 vector_dn("dup", "dup Vd.S, Wn")
 
+# move vector -> GP reg
+with_dn("umov_s0", "umov Wd, Vn.s[0]")
+with_dn("umov_d0", "umov Xd, Vn.d[0]")
+
+# mov GP reg -> vector
+with_dn("ins_s0", "ins Vd.s[0], Wn")
+with_dn("ins_d0", "ins Vd.d[0], Xn")
+
+
 # Memory -> vec reg loads.
 # The offset of the load is stored in a 64b immediate.
 
@@ -1081,7 +1091,11 @@ vector_math_dnm("ssadd", "sqadd")
 vector_math_dnm("sub",   "sub")
 vector_math_dnm("ussub", "uqsub")
 vector_math_dnm("sssub", "sqsub")
-vector_dnm("mul", "mul Vd.S, Vn.S, Vm.S", omit_sizes=("2d",))
+vector_math_dnm_no64("mul",  "mul")
+vector_math_dnm_no64("smax", "smax")
+vector_math_dnm_no64("smin", "smin")
+vector_math_dnm_no64("umax", "umax")
+vector_math_dnm_no64("umin", "umin")
 
 START_COLLECTION(f"simd_logical")
 
@@ -1093,33 +1107,42 @@ vector_logic_dnm("xor",  "eor")
 vector_logic_dn( "not",  "not")
 vector_dn("neg", "neg Vd.S, Vn.S")
 vector_dn("abs", "abs Vd.S, Vn.S")
+vector_logic_dnm( "bit",  "bit")
+vector_logic_dnm( "bif",  "bif")
+vector_logic_dnm( "bsl",  "bsl")
 
+vector_math_dnm("shlv", "ushl")
+vector_math_dnm("sshl", "sshl")
 
-"""
-START_COLLECTION(f"simd_dupi_optimizations")
+vector_dnm("cmeq", "cmeq Vd.S, Vn.S, Vm.S", scalar="cmeq Dd, Dn, Dm")
+vector_dnm("cmgt", "cmgt Vd.S, Vn.S, Vm.S", scalar="cmgt Dd, Dn, Dm")
+vector_dnm("cmge", "cmge Vd.S, Vn.S, Vm.S", scalar="cmge Dd, Dn, Dm")
+vector_dnm("cmhi", "cmhi Vd.S, Vn.S, Vm.S", scalar="cmhi Dd, Dn, Dm")
+vector_dnm("cmhs", "cmhs Vd.S, Vn.S, Vm.S", scalar="cmhs Dd, Dn, Dm")
+
+START_COLLECTION(f"simd_immediate")
 
 # Simple imm8 movs...
-with_d_immediate("movi_cmode_e_op0_q0",  "mov Vd.8b, #Ii",          immediate_range=range(256))
-with_d_immediate("movi_cmode_e_op0_q1",  "mov Vd.16b, #Ii",         immediate_range=range(256))
+with_d_immediate("movi_cmode_e_op0_q0",  "movi Vd.8b, #Ii",          immediate_range=range(256))
+with_d_immediate("movi_cmode_e_op0_q1",  "movi Vd.16b, #Ii",         immediate_range=range(256))
 
 # ... all 00/FF movs...
-with_d_immediate("movi_cmode_e_op1_q0",  "mov Dd, #Si",             immediate_range=range(256))
-with_d_immediate("movi_cmode_e_op1_q1",  "mov Vd.2d, #Si",          immediate_range=range(256))
+with_d_immediate("movi_cmode_e_op1_q0",  "movi Dd, #Si",             immediate_range=range(256))
+with_d_immediate("movi_cmode_e_op1_q1",  "movi Vd.2d, #Si",          immediate_range=range(256))
 
 # Halfword MOVs.
-with_d_immediate("movi_cmode_8_op0_q0",  "movi v0.4h, #Ii",         immediate_range=range(256))
-with_d_immediate("movi_cmode_8_op0_q1",  "movi v0.8h, #Ii",         immediate_range=range(256))
-with_d_immediate("movi_cmode_8_op0_q0",  "mvni v0.4h, #Ii",         immediate_range=range(256))
-with_d_immediate("movi_cmode_8_op0_q1",  "mvni v0.8h, #Ii",         immediate_range=range(256))
-with_d_immediate("movi_cmode_a_op0_q0",  "movi v0.4h, #Ii, lsl #8", immediate_range=range(256))
-with_d_immediate("movi_cmode_a_op0_q1",  "movi v0.8h, #Ii, lsl #8", immediate_range=range(256))
-with_d_immediate("movi_cmode_a_op0_q0",  "mvni v0.4h, #Ii, lsl #8", immediate_range=range(256))
-with_d_immediate("movi_cmode_a_op0_q1",  "mvni v0.8h, #Ii, lsl #8", immediate_range=range(256))
+with_d_immediate("movi_cmode_8_op0_q0",  "movi Vd.4h, #Ii",         immediate_range=range(256))
+with_d_immediate("movi_cmode_8_op0_q1",  "movi Vd.8h, #Ii",         immediate_range=range(256))
+with_d_immediate("mvni_cmode_8_op0_q0",  "mvni Vd.4h, #Ii",         immediate_range=range(256))
+with_d_immediate("mvni_cmode_8_op0_q1",  "mvni Vd.8h, #Ii",         immediate_range=range(256))
+with_d_immediate("movi_cmode_a_op0_q0",  "movi Vd.4h, #Ii, lsl #8", immediate_range=range(256))
+with_d_immediate("movi_cmode_a_op0_q1",  "movi Vd.8h, #Ii, lsl #8", immediate_range=range(256))
+with_d_immediate("mvni_cmode_a_op0_q0",  "mvni Vd.4h, #Ii, lsl #8", immediate_range=range(256))
+with_d_immediate("mvni_cmode_a_op0_q1",  "mvni Vd.8h, #Ii, lsl #8", immediate_range=range(256))
 
 # Halfword ORIs, for building complex MOVs.
-with_d_immediate("movi_orr_a_op0_q0",    "orr v0.4h, #Ii, lsl #8", immediate_range=range(256))
-with_d_immediate("movi_orr_a_op0_q1",    "orr v0.8h, #Ii, lsl #8", immediate_range=range(256))
-"""
+with_d_immediate("orr_cmode_a_op0_q0",   "orr Vd.4h, #Ii, lsl #8",  immediate_range=range(256))
+with_d_immediate("orr_cmode_a_op0_q1",   "orr Vd.8h, #Ii, lsl #8",  immediate_range=range(256))
 
 
 # Print a list of output files generated.
@@ -1137,4 +1160,4 @@ for name in output_files.keys():
 print(f"]", file=sys.stderr)
 
 # Statistics.
-sys.stderr.write(f"\nGenerated {gadgets} gadgets with {instructions} instructions (~{(instructions * 4) // 1024 // 1024} B).\n\n")
+sys.stderr.write(f"\nGenerated {gadgets} gadgets with {instructions} instructions (~{(instructions * 4) // 1024 // 1024} MiB).\n\n")
