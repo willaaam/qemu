@@ -133,10 +133,9 @@ void sdl2_gl_redraw(struct sdl2_console *scon)
     }
 }
 
-QEMUGLContext sdl2_gl_create_context(DisplayChangeListener *dcl,
-                                     QEMUGLParams *params)
+QEMUGLContext sdl2_gl_create_context(void *dg, QEMUGLParams *params)
 {
-    struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
+    struct sdl2_console *scon = dg;
     SDL_GLContext ctx;
 
     assert(scon->opengl);
@@ -168,17 +167,16 @@ QEMUGLContext sdl2_gl_create_context(DisplayChangeListener *dcl,
     return (QEMUGLContext)ctx;
 }
 
-void sdl2_gl_destroy_context(DisplayChangeListener *dcl, QEMUGLContext ctx)
+void sdl2_gl_destroy_context(void *dg, QEMUGLContext ctx)
 {
     SDL_GLContext sdlctx = (SDL_GLContext)ctx;
 
     SDL_GL_DeleteContext(sdlctx);
 }
 
-int sdl2_gl_make_context_current(DisplayChangeListener *dcl,
-                                 QEMUGLContext ctx)
+int sdl2_gl_make_context_current(void *dg, QEMUGLContext ctx)
 {
-    struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
+    struct sdl2_console *scon = dg;
     SDL_GLContext sdlctx = (SDL_GLContext)ctx;
 
     assert(scon->opengl);
@@ -186,9 +184,9 @@ int sdl2_gl_make_context_current(DisplayChangeListener *dcl,
     return SDL_GL_MakeCurrent(scon->real_window, sdlctx);
 }
 
-void sdl2_gl_scanout_disable(DisplayChangeListener *dcl)
+void sdl2_gl_scanout_disable(void *dg)
 {
-    struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
+    struct sdl2_console *scon = dg;
 
     assert(scon->opengl);
     scon->w = 0;
@@ -196,17 +194,30 @@ void sdl2_gl_scanout_disable(DisplayChangeListener *dcl)
     sdl2_set_scanout_mode(scon, false);
 }
 
-void sdl2_gl_scanout_texture(DisplayChangeListener *dcl,
+bool sdl2_gl_scanout_get_enabled(void *dg)
+{
+    return ((struct sdl2_console *)dg)->scanout_mode;
+}
+
+void sdl2_gl_scanout_texture(void *dg,
                              uint32_t backing_id,
-                             bool backing_y_0_top,
-                             uint32_t backing_width,
-                             uint32_t backing_height,
+                             DisplayGLTextureBorrower backing_borrow,
                              uint32_t x, uint32_t y,
                              uint32_t w, uint32_t h)
 {
-    struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
+    struct sdl2_console *scon = dg;
+    bool backing_y_0_top;
+    uint32_t backing_width;
+    uint32_t backing_height;
 
     assert(scon->opengl);
+
+    GLuint backing_texture = backing_borrow(backing_id, &backing_y_0_top,
+                                            &backing_width, &backing_height);
+    if (!backing_texture) {
+        return;
+    }
+
     scon->x = x;
     scon->y = y;
     scon->w = w;
@@ -217,7 +228,7 @@ void sdl2_gl_scanout_texture(DisplayChangeListener *dcl,
 
     sdl2_set_scanout_mode(scon, true);
     egl_fb_setup_for_tex(&scon->guest_fb, backing_width, backing_height,
-                         backing_id, false);
+                         backing_texture, false);
 }
 
 void sdl2_gl_scanout_flush(DisplayChangeListener *dcl,

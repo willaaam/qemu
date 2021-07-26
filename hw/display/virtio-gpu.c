@@ -217,6 +217,7 @@ virtio_gpu_generate_edid(VirtIOGPU *g, int scanout,
         .height_mm = b->req_state[scanout].height_mm,
         .prefx = b->req_state[scanout].width,
         .prefy = b->req_state[scanout].height,
+        .refresh_rate = b->req_state[scanout].refresh_rate,
     };
 
     edid->size = cpu_to_le32(sizeof(edid->edid));
@@ -520,7 +521,7 @@ static void virtio_gpu_resource_flush(VirtIOGPU *g,
         for (i = 0; i < g->parent_obj.conf.max_outputs; i++) {
             scanout = &g->parent_obj.scanout[i];
             if (scanout->resource_id == res->resource_id &&
-                console_has_gl(scanout->con)) {
+                console_has_gl()) {
                 dpy_gl_update(scanout->con, 0, 0, scanout->width,
                               scanout->height);
                 return;
@@ -632,7 +633,7 @@ static void virtio_gpu_do_set_scanout(VirtIOGPU *g,
     g->parent_obj.enable = 1;
 
     if (res->blob) {
-        if (console_has_gl(scanout->con)) {
+        if (console_has_gl()) {
             if (!virtio_gpu_update_dmabuf(g, scanout_id, res, fb)) {
                 virtio_gpu_update_scanout(g, scanout_id, res, r);
                 return;
@@ -645,7 +646,7 @@ static void virtio_gpu_do_set_scanout(VirtIOGPU *g,
     }
 
     /* create a surface for this scanout */
-    if ((res->blob && !console_has_gl(scanout->con)) ||
+    if ((res->blob && !console_has_gl()) ||
         !scanout->ds ||
         surface_data(scanout->ds) != data + fb->offset ||
         scanout->width != r->width ||

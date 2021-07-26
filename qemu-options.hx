@@ -1842,7 +1842,11 @@ DEF("display", HAS_ARG, QEMU_OPTION_display,
 #if defined(CONFIG_CURSES)
     "-display curses[,charset=<encoding>]\n"
 #endif
-#if defined(CONFIG_OPENGL)
+#if defined(CONFIG_COCOA)
+    "-display cocoa[,full-grab=on|off]\n"
+    "              [,swap-option-command=on|off]\n"
+#endif
+#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
     "-display egl-headless[,rendernode=<file>]\n"
 #endif
     "-display none\n"
@@ -2651,6 +2655,15 @@ DEF("netdev", HAS_ARG, QEMU_OPTION_netdev,
 #ifdef __linux__
     "-netdev vhost-vdpa,id=str,vhostdev=/path/to/dev\n"
     "                configure a vhost-vdpa network,Establish a vhost-vdpa netdev\n"
+#endif
+#ifdef CONFIG_VMNET
+    "-netdev vmnet-macos,id=str,mode=bridged[,ifname=ifname]\n"
+    "         configure a macOS-provided vmnet network in \"physical interface bridge\" mode\n"
+    "         the physical interface to bridge with defaults to en0 if unspecified\n"
+    "-netdev vmnet-macos,id=str,mode=host|shared\n"
+    "                     [,dhcp_start_address=addr,dhcp_end_address=addr,dhcp_subnet_mask=mask]\n"
+    "         configure a macOS-provided vmnet network in \"host\" or \"shared\" mode\n"
+    "         the DHCP configuration will be set automatically if unspecified\n"
 #endif
     "-netdev hubport,id=str,hubid=n[,netdev=nd]\n"
     "                configure a hub port on the hub with ID 'n'\n", QEMU_ARCH_ALL)
