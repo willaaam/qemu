@@ -1585,7 +1585,9 @@ for opt do
   ;;
   --disable-slirp-smbd) slirp_smbd=no
   ;;
-  --enable-shared-lib) shared_lib=true
+  --enable-shared-lib)
+      shared_lib=true
+      plugins="no"
   ;;
   --disable-shared-lib) shared_lib=false
   ;;
@@ -1600,6 +1602,10 @@ done
 # test for any invalid configuration combinations
 if test "$plugins" = "yes" -a "$tcg" = "disabled"; then
     error_exit "Can't enable plugins on non-TCG builds"
+fi
+
+if test "$plugins" = "yes" -a "$shared_lib" = "true"; then
+    error_exit "Can't enable plugins on shared library builds"
 fi
 
 case $git_submodules_action in
