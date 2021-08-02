@@ -1157,7 +1157,7 @@
     { 'name': 'gtk', 'if': 'defined(CONFIG_GTK)' },
     { 'name': 'sdl', 'if': 'defined(CONFIG_SDL)' },
     { 'name': 'egl-headless',
-              'if': 'defined(CONFIG_OPENGL) && defined(CONFIG_GBM)' },
+              'if': 'defined(CONFIG_OPENGL)' },
     { 'name': 'curses', 'if': 'defined(CONFIG_CURSES)' },
     { 'name': 'cocoa', 'if': 'defined(CONFIG_COCOA)' },
     { 'name': 'spice-app', 'if': 'defined(CONFIG_SPICE)'} ] }
