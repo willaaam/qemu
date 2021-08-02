@@ -873,15 +873,19 @@ static void spice_gl_switch(DisplayChangeListener *dcl,
                             struct DisplaySurface *new_surface)
 {
     SimpleSpiceDisplay *ssd = container_of(dcl, SimpleSpiceDisplay, dcl);
-    EGLint stride, fourcc;
-    int fd;
+    EGLint stride = 0, fourcc = 0;
+    int fd = -1;
+    int width = 0, height = 0;
 
     if (ssd->ds) {
         surface_gl_destroy_texture(ssd->gls, ssd->ds);
     }
     ssd->ds = new_surface;
+    width = surface_width(new_surface);
+    height = surface_height(new_surface);
     if (ssd->ds) {
         surface_gl_create_texture(ssd->gls, ssd->ds);
+#if defined(CONFIG_GBM)
         fd = egl_get_fd_for_texture(ssd->ds->texture,
                                     &stride, &fourcc,
                                     NULL);
@@ -889,31 +893,34 @@ static void spice_gl_switch(DisplayChangeListener *dcl,
             surface_gl_destroy_texture(ssd->gls, ssd->ds);
             return;
         }
+#endif
 
         trace_qemu_spice_gl_surface(ssd->qxl.id,
-                                    surface_width(ssd->ds),
-                                    surface_height(ssd->ds),
+                                    width,
+                                    height,
                                     fourcc);
 
         /* note: spice server will close the fd */
         spice_qxl_gl_scanout(&ssd->qxl, fd,
-                             surface_width(ssd->ds),
-                             surface_height(ssd->ds),
+                             width,
+                             height,
                              stride, fourcc, false);
         ssd->have_surface = true;
         ssd->have_scanout = false;
 
         qemu_spice_gl_monitor_config(ssd, 0, 0,
-                                     surface_width(ssd->ds),
-                                     surface_height(ssd->ds));
+                                     width,
+                                     height);
     }
 }
 
 static QEMUGLContext qemu_spice_gl_create_context(void *dg,
                                                   QEMUGLParams *params)
 {
+#if defined(CONFIG_GBM)
     eglMakeCurrent(qemu_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
                    qemu_egl_rn_ctx);
+#endif
     return qemu_egl_create_context(dg, params);
 }
 
@@ -947,7 +954,9 @@ static void qemu_spice_gl_scanout_texture(void *dg,
         return;
     }
 
+#if defined(CONFIG_GBM)
     fd = egl_get_fd_for_texture(tex_id, &stride, &fourcc, NULL);
+#endif
     if (fd < 0) {
         fprintf(stderr, "%s: failed to get fd for texture\n", __func__);
         return;
@@ -962,6 +971,7 @@ static void qemu_spice_gl_scanout_texture(void *dg,
     ssd->have_scanout = true;
 }
 
+#ifdef CONFIG_GBM
 static void qemu_spice_gl_scanout_dmabuf(void *dg, QemuDmaBuf *dmabuf)
 {
     SimpleSpiceDisplay *ssd = dg;
@@ -1017,21 +1027,25 @@ static void qemu_spice_gl_release_dmabuf(void *dg, QemuDmaBuf *dmabuf)
     }
     egl_dmabuf_release_texture(dmabuf);
 }
+#endif // CONFIG_GBM
 
 static void qemu_spice_gl_update(DisplayChangeListener *dcl,
                                  uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
     SimpleSpiceDisplay *ssd = container_of(dcl, SimpleSpiceDisplay, dcl);
+#ifdef CONFIG_GBM
     EGLint stride = 0, fourcc = 0;
+    int fd;
     bool render_cursor = false;
+#endif
     bool y_0_top = false; /* FIXME */
     uint64_t cookie;
-    int fd;
 
     if (!ssd->have_scanout) {
         return;
     }
 
+#ifdef CONFIG_GBM
     if (ssd->cursor_fb.texture) {
         render_cursor = true;
     }
@@ -1093,6 +1107,7 @@ static void qemu_spice_gl_update(DisplayChangeListener *dcl,
                           !y_0_top, x, y, 1.0, 1.0);
         glFlush();
     }
+#endif
 
     trace_qemu_spice_gl_update(ssd->qxl.id, w, h, x, y);
     qemu_spice_gl_block(ssd, true);
@@ -1119,10 +1134,12 @@ static const DisplayGLOps display_gl_ops = {
 
     .dpy_gl_scanout_disable  = qemu_spice_gl_scanout_disable,
     .dpy_gl_scanout_texture  = qemu_spice_gl_scanout_texture,
+#ifdef CONFIG_GBM
     .dpy_gl_scanout_dmabuf   = qemu_spice_gl_scanout_dmabuf,
     .dpy_gl_cursor_dmabuf    = qemu_spice_gl_cursor_dmabuf,
     .dpy_gl_cursor_position  = qemu_spice_gl_cursor_position,
     .dpy_gl_release_dmabuf   = qemu_spice_gl_release_dmabuf,
+#endif
 };
 
 #endif /* HAVE_SPICE_GL */
