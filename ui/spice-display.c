@@ -792,6 +792,124 @@ static const DisplayChangeListenerOps display_listener_ops = {
 
 #ifdef HAVE_SPICE_GL
 
+#if defined(CONFIG_IOSURFACE)
+
+static void AddIntegerValue(CFMutableDictionaryRef dictionary, const CFStringRef key, int32_t value)
+{
+    CFNumberRef number = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &value);
+    CFDictionaryAddValue(dictionary, key, number);
+    CFRelease(number);
+}
+
+static int spice_iosurface_create(SimpleSpiceDisplay *ssd, int width, int height)
+{
+    CFMutableDictionaryRef dict = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    AddIntegerValue(dict, kIOSurfaceWidth, width);
+    AddIntegerValue(dict, kIOSurfaceHeight, height);
+    AddIntegerValue(dict, kIOSurfacePixelFormat, 'BGRA');
+    AddIntegerValue(dict, kIOSurfaceBytesPerElement, 4);
+
+    ssd->iosurface = IOSurfaceCreate(dict);
+    CFRelease(dict);
+
+    if (!ssd->iosurface) {
+        error_report("spice_iosurface_create: IOSurfaceCreate failed");
+        return 0;
+    }
+
+#if defined(CONFIG_ANGLE)
+    const EGLint attribs[] = {
+        EGL_WIDTH,                         width,
+        EGL_HEIGHT,                        height,
+        EGL_IOSURFACE_PLANE_ANGLE,         0,
+        EGL_TEXTURE_TARGET,                EGL_TEXTURE_2D,
+        EGL_TEXTURE_INTERNAL_FORMAT_ANGLE, GL_BGRA_EXT,
+        EGL_TEXTURE_FORMAT,                EGL_TEXTURE_RGBA,
+        EGL_TEXTURE_TYPE_ANGLE,            GL_UNSIGNED_BYTE,
+        EGL_IOSURFACE_USAGE_HINT_ANGLE,    EGL_IOSURFACE_WRITE_HINT_ANGLE,
+        EGL_NONE,                          EGL_NONE,
+    };
+    ssd->esurface = qemu_egl_init_buffer_surface(spice_gl_ctx,
+                                                 EGL_IOSURFACE_ANGLE,
+                                                 ssd->iosurface,
+                                                 attribs);
+
+    if (ssd->esurface == NULL) {
+        goto gl_error;
+    }
+
+    egl_fb_setup_new_tex(&ssd->iosurface_fb, width, height);
+
+    return 1;
+gl_error:
+    CFRelease(ssd->iosurface);
+    ssd->iosurface = NULL;
+    return 0;
+#else
+    error_report("spice_iosurface_create: ANGLE not found");
+    return 0;
+#endif
+}
+
+static void spice_iosurface_destroy(SimpleSpiceDisplay *ssd)
+{
+    if (!ssd->iosurface) {
+        return;
+    }
+#if defined(CONFIG_ANGLE)
+    egl_fb_destroy(&ssd->iosurface_fb);
+    qemu_egl_destroy_surface(ssd->esurface);
+    ssd->esurface = EGL_NO_SURFACE;
+#endif
+    CFRelease(ssd->iosurface);
+    ssd->iosurface = NULL;
+}
+
+static int spice_iosurface_resize(SimpleSpiceDisplay *ssd, int width, int height)
+{
+    if (ssd->iosurface) {
+        if (IOSurfaceGetHeight(ssd->iosurface) != width ||
+            IOSurfaceGetWidth(ssd->iosurface) != height) {
+            spice_iosurface_destroy(ssd);
+            return spice_iosurface_create(ssd, width, height);
+        } else {
+            return 1;
+        }
+    } else {
+        return spice_iosurface_create(ssd, width, height);
+    }
+}
+
+static void spice_iosurface_blit(SimpleSpiceDisplay *ssd, GLuint src_texture, bool flip)
+{
+    egl_fb tmp_fb = { .texture = src_texture };
+    if (!ssd->iosurface) {
+        return;
+    }
+
+#if defined(CONFIG_ANGLE)
+    eglMakeCurrent(qemu_egl_display, ssd->esurface, ssd->esurface, spice_gl_ctx);
+    glBindTexture(GL_TEXTURE_2D, ssd->iosurface_fb.texture);
+    eglBindTexImage(qemu_egl_display, ssd->esurface, EGL_BACK_BUFFER);
+    egl_texture_blit(ssd->gls, &ssd->iosurface_fb, &tmp_fb, flip);
+#endif
+}
+
+static void spice_iosurface_flush(SimpleSpiceDisplay *ssd)
+{
+    if (!ssd->iosurface) {
+        return;
+    }
+
+#if defined(CONFIG_ANGLE)
+    eglMakeCurrent(qemu_egl_display, ssd->esurface, ssd->esurface, spice_gl_ctx);
+    eglReleaseTexImage(qemu_egl_display, ssd->esurface, EGL_BACK_BUFFER);
+#endif
+}
+
+#endif
+
 static void qemu_spice_gl_monitor_config(SimpleSpiceDisplay *ssd,
                                          int x, int y, int w, int h)
 {
@@ -854,6 +972,9 @@ static void spice_gl_refresh(DisplayChangeListener *dcl)
     graphic_hw_update(dcl->con);
     if (ssd->gl_updates && ssd->have_surface) {
         qemu_spice_gl_block(ssd, true);
+#if defined(CONFIG_IOSURFACE)
+        spice_iosurface_flush(ssd);
+#endif
         glFlush();
         cookie = (uintptr_t)qxl_cookie_new(QXL_COOKIE_TYPE_GL_DRAW_DONE, 0);
         spice_qxl_gl_draw_async(&ssd->qxl, 0, 0,
@@ -870,6 +991,11 @@ static void spice_gl_update(DisplayChangeListener *dcl,
     SimpleSpiceDisplay *ssd = container_of(dcl, SimpleSpiceDisplay, dcl);
 
     surface_gl_update_texture(ssd->gls, ssd->ds, x, y, w, h);
+#if defined(CONFIG_IOSURFACE)
+    if (!qemu_console_is_gl_blocked(ssd->dcl.con)) {
+        spice_iosurface_blit(ssd, ssd->ds->texture, true);
+    }
+#endif
     ssd->gl_updates++;
 }
 
@@ -895,6 +1021,21 @@ static void spice_gl_switch(DisplayChangeListener *dcl,
                                     NULL);
         if (fd < 0) {
             surface_gl_destroy_texture(ssd->gls, ssd->ds);
+            return;
+        }
+#elif defined(CONFIG_IOSURFACE)
+        if (spice_iosurface_resize(ssd, width, height)) {
+            // FIXME: replace test code with mach ports!
+            int fds[2];
+            if (pipe(fds) != 0) {
+            }
+            fd = fds[0];
+            fourcc = 'BGRA';
+            CFRetain(ssd->iosurface);
+            write(fds[1], &ssd->iosurface, sizeof(ssd->iosurface));
+            close(fds[1]);
+        } else {
+            error_report("spice_gl_switch: failed to create IOSurface");
             return;
         }
 #endif
@@ -940,6 +1081,9 @@ static void qemu_spice_gl_scanout_disable(void *dg)
     qemu_spice_gl_monitor_config(ssd, 0, 0, 0, 0);
     ssd->have_surface = false;
     ssd->have_scanout = false;
+#if defined(CONFIG_IOSURFACE)
+    spice_iosurface_destroy(ssd);
+#endif
 #if defined(CONFIG_ANGLE)
     ssd->backing_borrow = NULL;
     ssd->backing_id = -1;
@@ -967,6 +1111,23 @@ static void qemu_spice_gl_scanout_texture(void *dg,
 
 #if defined(CONFIG_GBM)
     fd = egl_get_fd_for_texture(tex_id, &stride, &fourcc, NULL);
+#elif defined(CONFIG_IOSURFACE)
+    if (spice_iosurface_resize(ssd, backing_width, backing_height)) {
+        // FIXME: replace test code with mach ports!
+#if defined(CONFIG_ANGLE)
+        ssd->backing_borrow = backing_borrow;
+        ssd->backing_id = backing_id;
+#endif
+        int fds[2];
+        pipe(fds);
+        fd = fds[0];
+        fourcc = 'BGRA';
+        CFRetain(ssd->iosurface);
+        write(fds[1], &ssd->iosurface, sizeof(ssd->iosurface));
+        close(fds[1]);
+    } else {
+        fd = -1;
+    }
 #endif
     if (fd < 0) {
         fprintf(stderr, "%s: failed to get fd for texture\n", __func__);
@@ -1118,6 +1279,12 @@ static void qemu_spice_gl_update(DisplayChangeListener *dcl,
                           !y_0_top, x, y, 1.0, 1.0);
         glFlush();
     }
+#elif defined(CONFIG_ANGLE) && defined(CONFIG_IOSURFACE)
+    GLuint tex_id = ssd->backing_borrow(ssd->backing_id, &y_0_top,
+                                        NULL, NULL);
+    spice_iosurface_blit(ssd, tex_id, !y_0_top);
+    spice_iosurface_flush(ssd);
+    //TODO: cursor stuff
 #endif
 
     trace_qemu_spice_gl_update(ssd->qxl.id, w, h, x, y);
@@ -1171,6 +1338,9 @@ static void qemu_spice_display_init_one(QemuConsole *con)
         ssd->gls = qemu_gl_init_shader();
         ssd->have_surface = false;
         ssd->have_scanout = false;
+#if defined(CONFIG_IOSURFACE)
+        ssd->iosurface = NULL;
+#endif
 #if defined(CONFIG_ANGLE)
         ssd->esurface = EGL_NO_SURFACE;
         ssd->backing_borrow = NULL;

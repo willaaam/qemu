@@ -100,6 +100,9 @@ if config_host.has_key('CONFIG_SPICE')
     'spice-input.c',
     'spice-display.c'
   ))
+  if iosurface.found()
+    spice_core_ss.add(iosurface)
+  endif
   ui_modules += {'spice-core' : spice_core_ss}
 endif
 

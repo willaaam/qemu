@@ -27,6 +27,11 @@
 #include "ui/qemu-pixman.h"
 #include "ui/console.h"
 
+#if defined(CONFIG_IOSURFACE)
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOSurface/IOSurfaceRef.h>
+#endif
+
 #if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
 # if SPICE_SERVER_VERSION >= 0x000d01 /* release 0.13.1 */
 #  define HAVE_SPICE_GL 1
@@ -129,6 +134,9 @@ struct SimpleSpiceDisplay {
 #if defined(CONFIG_GBM)
     QemuDmaBuf *guest_dmabuf;
     bool guest_dmabuf_refresh;
+#endif
+#if defined(CONFIG_IOSURFACE)
+    IOSurfaceRef iosurface;
 #endif
 #if defined(CONFIG_ANGLE)
     EGLSurface esurface;
