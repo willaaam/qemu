@@ -51,12 +51,7 @@ static void virtio_gpu_gl_update_cursor_data(VirtIOGPU *g,
 static void virtio_gpu_gl_flushed(VirtIOGPUBase *b)
 {
     VirtIOGPU *g = VIRTIO_GPU(b);
-    VirtIOGPUGL *gl = VIRTIO_GPU_GL(b);
 
-    if (gl->renderer_reset) {
-        gl->renderer_reset = false;
-        virtio_gpu_virgl_reset(g);
-    }
     virtio_gpu_process_cmdq(g);
 }
 
@@ -74,6 +69,10 @@ static void virtio_gpu_gl_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
         virtio_gpu_virgl_init(g);
         gl->renderer_inited = true;
     }
+    if (gl->renderer_reset) {
+        gl->renderer_reset = false;
+        virtio_gpu_virgl_reset(g);
+    }
 
     cmd = virtqueue_pop(vq, sizeof(struct virtio_gpu_ctrl_command));
     while (cmd) {
@@ -90,11 +89,17 @@ static void virtio_gpu_gl_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
 
 static void virtio_gpu_gl_reset(VirtIODevice *vdev)
 {
+    VirtIOGPU *g = VIRTIO_GPU(vdev);
     VirtIOGPUGL *gl = VIRTIO_GPU_GL(vdev);
 
     virtio_gpu_reset(vdev);
 
-    if (gl->renderer_inited) {
+    /*
+     * GL functions must be called with the associated GL context in main
+     * thread, and when the renderer is unblocked.
+     */
+    if (gl->renderer_inited && !gl->renderer_reset) {
+        virtio_gpu_virgl_reset_scanout(g);
         gl->renderer_reset = true;
     }
 }
@@ -107,6 +112,11 @@ static void virtio_gpu_gl_device_realize(DeviceState *qdev, Error **errp)
     error_setg(errp, "virgl is not supported on bigendian platforms");
     return;
 #endif
+
+    if (!object_resolve_path_type("", TYPE_VIRTIO_GPU_GL, NULL)) {
+        error_setg(errp, "at most one %s device is permitted", TYPE_VIRTIO_GPU_GL);
+        return;
+    }
 
     if (!display_opengl) {
         error_setg(errp, "opengl is not available");

@@ -202,6 +202,7 @@ static struct {
     { .driver = "virtio-vga",           .flag = &default_vga       },
     { .driver = "ati-vga",              .flag = &default_vga       },
     { .driver = "vhost-user-vga",       .flag = &default_vga       },
+    { .driver = "virtio-vga-gl",        .flag = &default_vga       },
 };
 
 static QemuOptsList qemu_rtc_opts = {
@@ -2126,6 +2127,7 @@ static void qemu_create_machine(QDict *qdict)
         QDict *default_opts =
             keyval_parse(machine_class->default_machine_opts, NULL, NULL,
                          &error_abort);
+        qemu_apply_legacy_machine_options(default_opts);
         object_set_properties_from_keyval(OBJECT(current_machine), default_opts,
                                           false, &error_abort);
         qobject_unref(default_opts);
