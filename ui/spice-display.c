@@ -1008,6 +1008,10 @@ static void spice_gl_switch(DisplayChangeListener *dcl,
     int width = 0, height = 0;
 
     if (ssd->ds) {
+#if defined(CONFIG_IOSURFACE)
+        // need to release texture from surface before destorying it
+        spice_iosurface_flush(ssd);
+#endif
         surface_gl_destroy_texture(ssd->gls, ssd->ds);
     }
     ssd->ds = new_surface;
