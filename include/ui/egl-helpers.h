@@ -6,6 +6,9 @@
 #ifdef CONFIG_GBM
 #include <gbm.h>
 #endif
+#ifdef CONFIG_ANGLE
+#include <EGL/eglext_angle.h>
+#endif
 #include "ui/console.h"
 #include "ui/shader.h"
 
@@ -49,6 +52,9 @@ void egl_dmabuf_release_texture(QemuDmaBuf *dmabuf);
 #endif
 
 EGLSurface qemu_egl_init_surface(EGLContext ectx, EGLNativeWindowType win);
+EGLSurface qemu_egl_init_buffer_surface(EGLContext ectx, EGLenum buftype,
+                                        EGLClientBuffer buffer, const EGLint *attrib_list);
+bool qemu_egl_destroy_surface(EGLSurface surface);
 
 int qemu_egl_init_dpy_cocoa(DisplayGLMode mode);
 int qemu_egl_init_dpy_surfaceless(DisplayGLMode mode);
@@ -57,6 +63,12 @@ int qemu_egl_init_dpy_surfaceless(DisplayGLMode mode);
 
 int qemu_egl_init_dpy_x11(EGLNativeDisplayType dpy, DisplayGLMode mode);
 int qemu_egl_init_dpy_mesa(EGLNativeDisplayType dpy, DisplayGLMode mode);
+
+#endif
+
+#if defined(CONFIG_ANGLE)
+
+int qemu_egl_init_dpy_angle(DisplayGLMode mode);
 
 #endif
 

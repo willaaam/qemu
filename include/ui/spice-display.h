@@ -130,6 +130,12 @@ struct SimpleSpiceDisplay {
     QemuDmaBuf *guest_dmabuf;
     bool guest_dmabuf_refresh;
 #endif
+#if defined(CONFIG_ANGLE)
+    EGLSurface esurface;
+    egl_fb iosurface_fb;
+    DisplayGLTextureBorrower backing_borrow;
+    uint32_t backing_id;
+#endif
     bool render_cursor;
 
     egl_fb guest_fb;

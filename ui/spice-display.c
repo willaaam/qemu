@@ -29,6 +29,10 @@
 
 bool spice_opengl;
 
+#ifdef CONFIG_ANGLE
+EGLContext spice_gl_ctx;
+#endif
+
 int qemu_spice_rect_is_empty(const QXLRect* r)
 {
     return r->top == r->bottom || r->left == r->right;
@@ -920,6 +924,9 @@ static QEMUGLContext qemu_spice_gl_create_context(void *dg,
 #if defined(CONFIG_GBM)
     eglMakeCurrent(qemu_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
                    qemu_egl_rn_ctx);
+#elif defined(CONFIG_ANGLE)
+    eglMakeCurrent(qemu_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                   spice_gl_ctx);
 #endif
     return qemu_egl_create_context(dg, params);
 }
@@ -933,6 +940,10 @@ static void qemu_spice_gl_scanout_disable(void *dg)
     qemu_spice_gl_monitor_config(ssd, 0, 0, 0, 0);
     ssd->have_surface = false;
     ssd->have_scanout = false;
+#if defined(CONFIG_ANGLE)
+    ssd->backing_borrow = NULL;
+    ssd->backing_id = -1;
+#endif
 }
 
 static void qemu_spice_gl_scanout_texture(void *dg,
@@ -1160,6 +1171,11 @@ static void qemu_spice_display_init_one(QemuConsole *con)
         ssd->gls = qemu_gl_init_shader();
         ssd->have_surface = false;
         ssd->have_scanout = false;
+#if defined(CONFIG_ANGLE)
+        ssd->esurface = EGL_NO_SURFACE;
+        ssd->backing_borrow = NULL;
+        ssd->backing_id = -1;
+#endif
         console_set_displayglcontext(con, ssd);
         register_displayglops(&display_gl_ops);
     }

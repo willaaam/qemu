@@ -313,6 +313,38 @@ EGLSurface qemu_egl_init_surface(EGLContext ectx, EGLNativeWindowType win)
     return esurface;
 }
 
+EGLSurface qemu_egl_init_buffer_surface(EGLContext ectx,
+                                        EGLenum buftype,
+                                        EGLClientBuffer buffer,
+                                        const EGLint *attrib_list)
+{
+    EGLSurface esurface;
+    EGLBoolean b;
+
+    esurface = eglCreatePbufferFromClientBuffer(qemu_egl_display,
+                                                buftype,
+                                                buffer,
+                                                qemu_egl_config,
+                                                attrib_list);
+    if (esurface == EGL_NO_SURFACE) {
+        error_report("egl: eglCreatePbufferFromClientBuffer failed");
+        return NULL;
+    }
+
+    b = eglMakeCurrent(qemu_egl_display, esurface, esurface, ectx);
+    if (b == EGL_FALSE) {
+        error_report("egl: eglMakeCurrent failed");
+        return NULL;
+    }
+
+    return esurface;
+}
+
+bool qemu_egl_destroy_surface(EGLSurface surface)
+{
+    return eglDestroySurface(qemu_egl_display, surface);
+}
+
 /* ---------------------------------------------------------------------- */
 
 static int qemu_egl_init_dpy(EGLDisplay dpy, DisplayGLMode mode)
@@ -484,6 +516,22 @@ int qemu_egl_init_dpy_mesa(EGLNativeDisplayType dpy, DisplayGLMode mode)
 #else
     result = qemu_egl_init_dpy_platform(dpy, 0, mode);
 #endif
+    if (!result) {
+        result = qemu_egl_config_dpy();
+    }
+
+    return result;
+}
+
+#endif
+
+#if defined(CONFIG_ANGLE)
+
+int qemu_egl_init_dpy_angle(DisplayGLMode mode)
+{
+    int result;
+
+    result = qemu_egl_init_dpy_platform(NULL, EGL_PLATFORM_ANGLE_ANGLE, mode);
     if (!result) {
         result = qemu_egl_config_dpy();
     }

@@ -52,6 +52,10 @@ static int spice_have_target_host;
 
 static QemuThread me;
 
+#ifdef CONFIG_ANGLE
+extern EGLContext spice_gl_ctx;
+#endif
+
 struct SpiceTimer {
     QEMUTimer *timer;
 };
@@ -845,11 +849,27 @@ static void qemu_spice_init(void)
                          "incompatible with -spice port/tls-port");
             exit(1);
         }
+#if defined(CONFIG_GBM)
         if (egl_rendernode_init(qemu_opt_get(opts, "rendernode"),
                                 DISPLAYGL_MODE_ON) != 0) {
             error_report("Failed to initialize EGL render node for SPICE GL");
             exit(1);
         }
+#elif defined(CONFIG_ANGLE)
+        if (qemu_egl_init_dpy_angle(DISPLAYGL_MODE_ES)) {
+            error_report("SPICE GL failed to initialize ANGLE display");
+            exit(1);
+        }
+
+        spice_gl_ctx = qemu_egl_init_ctx();
+        if (!spice_gl_ctx) {
+            error_report("egl: egl_init_ctx failed");
+            exit(1);
+        }
+#else
+        error_report("No backend to support SPICE GL");
+        exit(1);
+#endif
         display_opengl = 1;
         spice_opengl = 1;
     }
