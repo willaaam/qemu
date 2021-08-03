@@ -50,6 +50,7 @@
 
 #define TCG_TARGET_INSN_UNIT_SIZE        1
 #define TCG_TARGET_TLB_DISPLACEMENT_BITS 32
+#define MAX_CODE_GEN_BUFFER_SIZE  ((size_t)-1)
 
 // We're an interpreted target; even if we're JIT-compiling to our interpreter's
 // weird psuedo-native bytecode. We'll indicate that we're intepreted.
@@ -141,11 +142,6 @@
 #define TCG_TARGET_HAS_clz_i64          0
 #define TCG_TARGET_HAS_ctz_i64          0
 #define TCG_TARGET_HAS_ctpop_i64        0
-
-
-// GOTO_PTR is too complex to emit a simple gadget for.
-// We'll let C handle it, since the overhead is similar.
-#define TCG_TARGET_HAS_goto_ptr         0
 
 // We don't have a simple gadget for this, since we're always assuming softmmu.
 #define TCG_TARGET_HAS_qemu_st8_i32     0

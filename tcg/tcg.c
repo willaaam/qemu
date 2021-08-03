@@ -1175,12 +1175,18 @@ bool tcg_op_supported(TCGOpcode op)
     case INDEX_op_insn_start:
     case INDEX_op_exit_tb:
     case INDEX_op_goto_tb:
-    case INDEX_op_goto_ptr:
     case INDEX_op_qemu_ld_i32:
     case INDEX_op_qemu_st_i32:
     case INDEX_op_qemu_ld_i64:
     case INDEX_op_qemu_st_i64:
         return true;
+
+    case INDEX_op_goto_ptr:
+#if defined(CONFIG_TCG_THREADED_INTERPRETER)
+        return false;
+#else
+        return true;
+#endif
 
     case INDEX_op_qemu_st8_i32:
         return TCG_TARGET_HAS_qemu_st8_i32;
