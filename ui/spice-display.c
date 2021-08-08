@@ -24,6 +24,9 @@
 #include "qemu/queue.h"
 #include "ui/console.h"
 #include "trace.h"
+#ifdef CONFIG_IOSURFACE
+#include <TargetConditionals.h>
+#endif
 
 #include "ui/spice-display.h"
 
@@ -809,6 +812,9 @@ static int spice_iosurface_create(SimpleSpiceDisplay *ssd, int width, int height
     AddIntegerValue(dict, kIOSurfaceHeight, height);
     AddIntegerValue(dict, kIOSurfacePixelFormat, 'BGRA');
     AddIntegerValue(dict, kIOSurfaceBytesPerElement, 4);
+#if TARGET_OS_OSX
+    CFDictionaryAddValue(dict, kIOSurfaceIsGlobal, kCFBooleanTrue);
+#endif
 
     ssd->iosurface = IOSurfaceCreate(dict);
     CFRelease(dict);
@@ -879,6 +885,26 @@ static int spice_iosurface_resize(SimpleSpiceDisplay *ssd, int width, int height
     } else {
         return spice_iosurface_create(ssd, width, height);
     }
+}
+
+/* FIXME: use mach ports instead of this hack */
+static int spice_iosurface_create_fd(SimpleSpiceDisplay *ssd, int *fourcc)
+{
+    int fds[2];
+    IOSurfaceID surfaceid;
+
+    if (!ssd->iosurface) {
+        return -1;
+    }
+    if (pipe(fds) < 0) {
+        error_report("spice_iosurface_create_fd: failed to create pipe");
+        return -1;
+    }
+    *fourcc = 'BGRA';
+    surfaceid = IOSurfaceGetID(ssd->iosurface);
+    write(fds[1], &surfaceid, sizeof(surfaceid));
+    close(fds[1]);
+    return fds[0];
 }
 
 static void spice_iosurface_blit(SimpleSpiceDisplay *ssd, GLuint src_texture, bool flip)
@@ -1029,15 +1055,11 @@ static void spice_gl_switch(DisplayChangeListener *dcl,
         }
 #elif defined(CONFIG_IOSURFACE)
         if (spice_iosurface_resize(ssd, width, height)) {
-            // FIXME: replace test code with mach ports!
-            int fds[2];
-            if (pipe(fds) != 0) {
+            fd = spice_iosurface_create_fd(ssd, &fourcc);
+            if (fd < 0) {
+                error_report("spice_gl_switch: failed to create fd");
+                return;
             }
-            fd = fds[0];
-            fourcc = 'BGRA';
-            CFRetain(ssd->iosurface);
-            write(fds[1], &ssd->iosurface, sizeof(ssd->iosurface));
-            close(fds[1]);
         } else {
             error_report("spice_gl_switch: failed to create IOSurface");
             return;
@@ -1117,18 +1139,11 @@ static void qemu_spice_gl_scanout_texture(void *dg,
     fd = egl_get_fd_for_texture(tex_id, &stride, &fourcc, NULL);
 #elif defined(CONFIG_IOSURFACE)
     if (spice_iosurface_resize(ssd, backing_width, backing_height)) {
-        // FIXME: replace test code with mach ports!
 #if defined(CONFIG_ANGLE)
         ssd->backing_borrow = backing_borrow;
         ssd->backing_id = backing_id;
 #endif
-        int fds[2];
-        pipe(fds);
-        fd = fds[0];
-        fourcc = 'BGRA';
-        CFRetain(ssd->iosurface);
-        write(fds[1], &ssd->iosurface, sizeof(ssd->iosurface));
-        close(fds[1]);
+        fd = spice_iosurface_create_fd(ssd, &fourcc);
     } else {
         fd = -1;
     }
