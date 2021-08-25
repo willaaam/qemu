@@ -27,6 +27,10 @@
 #ifdef CONFIG_IOSURFACE
 #include <TargetConditionals.h>
 #endif
+#ifdef CONFIG_ANGLE
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+#endif
 
 #include "ui/spice-display.h"
 
@@ -825,11 +829,29 @@ static int spice_iosurface_create(SimpleSpiceDisplay *ssd, int width, int height
     }
 
 #if defined(CONFIG_ANGLE)
+    EGLint target = 0;
+    GLenum tex_target = 0;
+    if (eglGetConfigAttrib(qemu_egl_display,
+                           qemu_egl_config,
+                           EGL_BIND_TO_TEXTURE_TARGET_ANGLE,
+                           &target) != EGL_TRUE) {
+        error_report("spice_iosurface_create: eglGetConfigAttrib failed");
+        return 0;
+    }
+    if (target == EGL_TEXTURE_2D) {
+        tex_target = GL_TEXTURE_2D;
+    } else if (target == EGL_TEXTURE_RECTANGLE_ANGLE) {
+        tex_target = GL_TEXTURE_RECTANGLE_ANGLE;
+    } else {
+        error_report("spice_iosurface_create: unsupported texture target");
+        return 0;
+    }
+
     const EGLint attribs[] = {
         EGL_WIDTH,                         width,
         EGL_HEIGHT,                        height,
         EGL_IOSURFACE_PLANE_ANGLE,         0,
-        EGL_TEXTURE_TARGET,                EGL_TEXTURE_2D,
+        EGL_TEXTURE_TARGET,                target,
         EGL_TEXTURE_INTERNAL_FORMAT_ANGLE, GL_BGRA_EXT,
         EGL_TEXTURE_FORMAT,                EGL_TEXTURE_RGBA,
         EGL_TEXTURE_TYPE_ANGLE,            GL_UNSIGNED_BYTE,
@@ -845,7 +867,7 @@ static int spice_iosurface_create(SimpleSpiceDisplay *ssd, int width, int height
         goto gl_error;
     }
 
-    egl_fb_setup_new_tex(&ssd->iosurface_fb, width, height);
+    egl_fb_setup_new_tex_target(&ssd->iosurface_fb, width, height, tex_target);
 
     return 1;
 gl_error:
@@ -909,14 +931,14 @@ static int spice_iosurface_create_fd(SimpleSpiceDisplay *ssd, int *fourcc)
 
 static void spice_iosurface_blit(SimpleSpiceDisplay *ssd, GLuint src_texture, bool flip)
 {
-    egl_fb tmp_fb = { .texture = src_texture };
+    egl_fb tmp_fb = { .texture = src_texture, .texture_target = GL_TEXTURE_2D };
     if (!ssd->iosurface) {
         return;
     }
 
 #if defined(CONFIG_ANGLE)
     eglMakeCurrent(qemu_egl_display, ssd->esurface, ssd->esurface, spice_gl_ctx);
-    glBindTexture(GL_TEXTURE_2D, ssd->iosurface_fb.texture);
+    glBindTexture(ssd->iosurface_fb.texture_target, ssd->iosurface_fb.texture);
     eglBindTexImage(qemu_egl_display, ssd->esurface, EGL_BACK_BUFFER);
     egl_texture_blit(ssd->gls, &ssd->iosurface_fb, &tmp_fb, flip);
 #endif

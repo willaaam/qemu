@@ -20,14 +20,18 @@ typedef struct egl_fb {
     int width;
     int height;
     GLuint texture;
+    GLenum texture_target;
     GLuint framebuffer;
     bool delete_texture;
 } egl_fb;
 
 void egl_fb_destroy(egl_fb *fb);
 void egl_fb_setup_default(egl_fb *fb, int width, int height);
+void egl_fb_setup_for_tex_target(egl_fb *fb, int width, int height,
+                                 GLuint texture, GLenum target, bool delete);
 void egl_fb_setup_for_tex(egl_fb *fb, int width, int height,
                           GLuint texture, bool delete);
+void egl_fb_setup_new_tex_target(egl_fb *fb, int width, int height, GLenum target);
 void egl_fb_setup_new_tex(egl_fb *fb, int width, int height);
 void egl_fb_blit(egl_fb *dst, egl_fb *src, bool flip);
 void egl_fb_read(DisplaySurface *dst, egl_fb *src);

@@ -58,14 +58,15 @@ void egl_fb_setup_default(egl_fb *fb, int width, int height)
     fb->framebuffer = 0; /* default framebuffer */
 }
 
-void egl_fb_setup_for_tex(egl_fb *fb, int width, int height,
-                          GLuint texture, bool delete)
+void egl_fb_setup_for_tex_target(egl_fb *fb, int width, int height,
+                                 GLuint texture, GLenum target, bool delete)
 {
     egl_fb_delete_texture(fb);
 
     fb->width = width;
     fb->height = height;
     fb->texture = texture;
+    fb->texture_target = target;
     fb->delete_texture = delete;
     if (!fb->framebuffer) {
         glGenFramebuffers(1, &fb->framebuffer);
@@ -73,19 +74,30 @@ void egl_fb_setup_for_tex(egl_fb *fb, int width, int height,
 
     glBindFramebuffer(GL_FRAMEBUFFER_EXT, fb->framebuffer);
     glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT,
-                              GL_TEXTURE_2D, fb->texture, 0);
+                              fb->texture_target, fb->texture, 0);
 }
 
-void egl_fb_setup_new_tex(egl_fb *fb, int width, int height)
+void egl_fb_setup_for_tex(egl_fb *fb, int width, int height,
+                          GLuint texture, bool delete)
+{
+    egl_fb_setup_for_tex_target(fb, width, height, texture, GL_TEXTURE_2D, delete);
+}
+
+void egl_fb_setup_new_tex_target(egl_fb *fb, int width, int height, GLenum target)
 {
     GLuint texture;
 
     glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height,
+    glBindTexture(target, texture);
+    glTexImage2D(target, 0, GL_RGBA, width, height,
                  0, GL_BGRA, GL_UNSIGNED_BYTE, 0);
 
-    egl_fb_setup_for_tex(fb, width, height, texture, true);
+    egl_fb_setup_for_tex_target(fb, width, height, texture, target, true);
+}
+
+void egl_fb_setup_new_tex(egl_fb *fb, int width, int height)
+{
+    egl_fb_setup_new_tex_target(fb, width, height, GL_TEXTURE_2D);
 }
 
 void egl_fb_blit(egl_fb *dst, egl_fb *src, bool flip)
@@ -115,7 +127,7 @@ void egl_texture_blit(QemuGLShader *gls, egl_fb *dst, egl_fb *src, bool flip)
     glBindFramebuffer(GL_FRAMEBUFFER_EXT, dst->framebuffer);
     glViewport(0, 0, dst->width, dst->height);
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, src->texture);
+    glBindTexture(src->texture_target, src->texture);
     qemu_gl_run_texture_blit(gls, flip);
 }
 
@@ -131,7 +143,7 @@ void egl_texture_blend(QemuGLShader *gls, egl_fb *dst, egl_fb *src, bool flip,
         glViewport(x, dst->height - h - y, w, h);
     }
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, src->texture);
+    glBindTexture(src->texture_target, src->texture);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     qemu_gl_run_texture_blit(gls, flip);
