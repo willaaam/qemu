@@ -929,7 +929,7 @@ static int spice_iosurface_create_fd(SimpleSpiceDisplay *ssd, int *fourcc)
     return fds[0];
 }
 
-static void spice_iosurface_blit(SimpleSpiceDisplay *ssd, GLuint src_texture, bool flip)
+static void spice_iosurface_blit(SimpleSpiceDisplay *ssd, GLuint src_texture, bool flip, bool swap)
 {
     egl_fb tmp_fb = { .texture = src_texture, .texture_target = GL_TEXTURE_2D };
     if (!ssd->iosurface) {
@@ -940,7 +940,7 @@ static void spice_iosurface_blit(SimpleSpiceDisplay *ssd, GLuint src_texture, bo
     eglMakeCurrent(qemu_egl_display, ssd->esurface, ssd->esurface, spice_gl_ctx);
     glBindTexture(ssd->iosurface_fb.texture_target, ssd->iosurface_fb.texture);
     eglBindTexImage(qemu_egl_display, ssd->esurface, EGL_BACK_BUFFER);
-    egl_texture_blit(ssd->gls, &ssd->iosurface_fb, &tmp_fb, flip);
+    egl_texture_blit(ssd->gls, &ssd->iosurface_fb, &tmp_fb, flip, swap);
 #endif
 }
 
@@ -1041,7 +1041,7 @@ static void spice_gl_update(DisplayChangeListener *dcl,
     surface_gl_update_texture(ssd->gls, ssd->ds, x, y, w, h);
 #if defined(CONFIG_IOSURFACE)
     if (!qemu_console_is_gl_blocked(ssd->dcl.con)) {
-        spice_iosurface_blit(ssd, ssd->ds->texture, true);
+        spice_iosurface_blit(ssd, ssd->ds->texture, true, ssd->ds->glswapped);
     }
 #endif
     ssd->gl_updates++;
@@ -1315,15 +1315,15 @@ static void qemu_spice_gl_update(DisplayChangeListener *dcl,
         y = ssd->ptr_y;
         qemu_mutex_unlock(&ssd->lock);
         egl_texture_blit(ssd->gls, &ssd->blit_fb, &ssd->guest_fb,
-                         !y_0_top);
+                         !y_0_top, false);
         egl_texture_blend(ssd->gls, &ssd->blit_fb, &ssd->cursor_fb,
-                          !y_0_top, x, y, 1.0, 1.0);
+                          !y_0_top, false, x, y, 1.0, 1.0);
         glFlush();
     }
 #elif defined(CONFIG_ANGLE) && defined(CONFIG_IOSURFACE)
     GLuint tex_id = ssd->backing_borrow(ssd->backing_id, &y_0_top,
                                         NULL, NULL);
-    spice_iosurface_blit(ssd, tex_id, !y_0_top);
+    spice_iosurface_blit(ssd, tex_id, !y_0_top, false);
     spice_iosurface_flush(ssd);
     //TODO: cursor stuff
 #endif

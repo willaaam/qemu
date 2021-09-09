@@ -116,6 +116,7 @@ typedef struct DisplaySurface {
     GLenum glformat;
     GLenum gltype;
     GLuint texture;
+    bool   glswapped;
 #endif
 } DisplaySurface;
 

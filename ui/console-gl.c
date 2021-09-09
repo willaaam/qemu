@@ -52,8 +52,9 @@ void surface_gl_create_texture(QemuGLShader *gls,
     switch (surface->format) {
     case PIXMAN_BE_b8g8r8x8:
     case PIXMAN_BE_b8g8r8a8:
-        surface->glformat = GL_BGRA_EXT;
+        surface->glformat = GL_RGBA;
         surface->gltype = GL_UNSIGNED_BYTE;
+        surface->glswapped = true;
         break;
     case PIXMAN_BE_x8r8g8b8:
     case PIXMAN_BE_a8r8g8b8:
@@ -121,7 +122,7 @@ void surface_gl_render_texture(QemuGLShader *gls,
     glClearColor(0.1f, 0.1f, 0.1f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    qemu_gl_run_texture_blit(gls, false);
+    qemu_gl_run_texture_blit(gls, false, false);
 }
 
 void surface_gl_destroy_texture(QemuGLShader *gls,
