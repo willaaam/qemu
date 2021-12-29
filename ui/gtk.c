@@ -36,6 +36,7 @@
 #include "qapi/qapi-commands-machine.h"
 #include "qapi/qapi-commands-misc.h"
 #include "qemu/cutils.h"
+#include "qemu/main-loop.h"
 
 #include "ui/console.h"
 #include "ui/gtk.h"
@@ -575,6 +576,25 @@ static bool gd_has_dmabuf(void *dg)
     return vc->gfx.has_dmabuf;
 }
 
+static void gd_gl_release_dmabuf(void *dg, QemuDmaBuf *dmabuf)
+{
+#ifdef CONFIG_GBM
+    egl_dmabuf_release_texture(dmabuf);
+#endif
+}
+
+void gd_hw_gl_flushed(void *vcon)
+{
+    VirtualConsole *vc = vcon;
+    QemuDmaBuf *dmabuf = vc->gfx.guest_fb.dmabuf;
+
+    qemu_set_fd_handler(dmabuf->fence_fd, NULL, NULL, NULL);
+    close(dmabuf->fence_fd);
+    dmabuf->fence_fd = -1;
+    graphic_hw_gl_block(vc->gfx.dcl.con, false);
+    graphic_hw_gl_flushed(vc->gfx.dcl.con);
+}
+
 /** DisplayState Callbacks (opengl version) **/
 
 static const DisplayGLOps dg_gl_area_ops = {
@@ -585,6 +605,7 @@ static const DisplayGLOps dg_gl_area_ops = {
     .dpy_gl_scanout_texture     = gd_gl_area_scanout_texture,
     .dpy_gl_scanout_disable     = gd_gl_area_scanout_disable,
     .dpy_gl_scanout_dmabuf      = gd_gl_area_scanout_dmabuf,
+    .dpy_gl_release_dmabuf      = gd_gl_release_dmabuf,
     .dpy_has_dmabuf             = gd_has_dmabuf,
 };
 
@@ -611,7 +632,7 @@ static const DisplayChangeListenerOps dcl_egl_ops = {
     .dpy_mouse_set        = gd_mouse_set,
     .dpy_cursor_define    = gd_cursor_define,
 
-    .dpy_gl_update        = gd_egl_scanout_flush,
+    .dpy_gl_update        = gd_egl_flush,
 };
 
 static const DisplayGLOps dg_egl_ops = {
@@ -623,7 +644,7 @@ static const DisplayGLOps dg_egl_ops = {
     .dpy_gl_scanout_dmabuf   = gd_egl_scanout_dmabuf,
     .dpy_gl_cursor_dmabuf    = gd_egl_cursor_dmabuf,
     .dpy_gl_cursor_position  = gd_egl_cursor_position,
-    .dpy_gl_release_dmabuf   = gd_egl_release_dmabuf,
+    .dpy_gl_release_dmabuf   = gd_gl_release_dmabuf,
     .dpy_has_dmabuf          = gd_has_dmabuf,
 };
 
@@ -771,6 +792,9 @@ static gboolean gd_draw_event(GtkWidget *widget, cairo_t *cr, void *opaque)
     if (!vc->gfx.ds) {
         return FALSE;
     }
+    if (!vc->gfx.surface) {
+        return FALSE;
+    }
 
     gd_update_monitor_refresh_rate(vc, vc->window ? vc->window : s->window);
 
@@ -827,10 +851,11 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
 {
     VirtualConsole *vc = opaque;
     GtkDisplayState *s = vc->s;
+    GdkWindow *window;
     int x, y;
     int mx, my;
     int fbh, fbw;
-    int ww, wh;
+    int ww, wh, ws;
 
     if (!vc->gfx.ds) {
         return TRUE;
@@ -839,8 +864,10 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
     fbw = surface_width(vc->gfx.ds) * vc->gfx.scale_x;
     fbh = surface_height(vc->gfx.ds) * vc->gfx.scale_y;
 
-    ww = gdk_window_get_width(gtk_widget_get_window(vc->gfx.drawing_area));
-    wh = gdk_window_get_height(gtk_widget_get_window(vc->gfx.drawing_area));
+    window = gtk_widget_get_window(vc->gfx.drawing_area);
+    ww = gdk_window_get_width(window);
+    wh = gdk_window_get_height(window);
+    ws = gdk_window_get_scale_factor(window);
 
     mx = my = 0;
     if (ww > fbw) {
@@ -850,8 +877,8 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
         my = (wh - fbh) / 2;
     }
 
-    x = (motion->x - mx) / vc->gfx.scale_x;
-    y = (motion->y - my) / vc->gfx.scale_y;
+    x = (motion->x - mx) / vc->gfx.scale_x * ws;
+    y = (motion->y - my) / vc->gfx.scale_y * ws;
 
     if (qemu_input_is_absolute()) {
         if (x < 0 || y < 0 ||
@@ -1234,6 +1261,16 @@ static gboolean gd_tab_window_close(GtkWidget *widget, GdkEvent *event,
                                     vc->tab_item, vc->label);
     gtk_widget_destroy(vc->window);
     vc->window = NULL;
+#if defined(CONFIG_OPENGL)
+    if (vc->gfx.esurface) {
+        eglDestroySurface(qemu_egl_display, vc->gfx.esurface);
+        vc->gfx.esurface = NULL;
+    }
+    if (vc->gfx.ectx) {
+        eglDestroyContext(qemu_egl_display, vc->gfx.ectx);
+        vc->gfx.ectx = NULL;
+    }
+#endif
     return TRUE;
 }
 
@@ -1263,6 +1300,16 @@ static void gd_menu_untabify(GtkMenuItem *item, void *opaque)
     if (!vc->window) {
         gtk_widget_set_sensitive(vc->menu_item, false);
         vc->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+#if defined(CONFIG_OPENGL)
+        if (vc->gfx.esurface) {
+            eglDestroySurface(qemu_egl_display, vc->gfx.esurface);
+            vc->gfx.esurface = NULL;
+        }
+        if (vc->gfx.esurface) {
+            eglDestroyContext(qemu_egl_display, vc->gfx.ectx);
+            vc->gfx.ectx = NULL;
+        }
+#endif
         gd_widget_reparent(s->notebook, vc->window, vc->tab_item);
 
         g_signal_connect(vc->window, "delete-event",

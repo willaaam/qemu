@@ -11,7 +11,6 @@
 #ifndef QEMU_HVF_ARM_H
 #define QEMU_HVF_ARM_H
 
-#include "qemu/accel.h"
 #include "cpu.h"
 
 void hvf_arm_set_cpu_features_from_host(struct ARMCPU *cpu);

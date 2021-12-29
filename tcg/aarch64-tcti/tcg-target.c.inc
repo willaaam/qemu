@@ -24,6 +24,8 @@
 
 #define TCTI_GADGET_IMMEDIATE_ARRAY_LEN 64
 
+#include "tcg/tcg-ldst.h"
+
 // Grab our gadget definitions.
 // FIXME: use the system path instead of hardcoding this?
 #include "tcti-gadgets.c.inc"
@@ -319,33 +321,33 @@ void tb_target_set_jmp_target(uintptr_t tc_ptr, uintptr_t jmp_rx, uintptr_t jmp_
 #ifdef CONFIG_SOFTMMU
 
 // TODO: relocate these prototypes?
-tcg_target_ulong helper_ret_ldub_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
-tcg_target_ulong helper_le_lduw_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
-tcg_target_ulong helper_le_ldul_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
-tcg_target_ulong helper_be_lduw_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
-tcg_target_ulong helper_be_ldul_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
+tcg_target_ulong helper_ret_ldub_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr);
+tcg_target_ulong helper_le_lduw_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr);
+tcg_target_ulong helper_le_ldul_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr);
+tcg_target_ulong helper_be_lduw_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr);
+tcg_target_ulong helper_be_ldul_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr);
 
-tcg_target_ulong helper_ret_ldub_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+tcg_target_ulong helper_ret_ldub_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr)
 {
     return (int8_t)helper_ret_ldub_mmu(env, addr, oi, retaddr);
 }
 
-tcg_target_ulong helper_le_lduw_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+tcg_target_ulong helper_le_lduw_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr)
 {
     return (int16_t)helper_le_lduw_mmu(env, addr, oi, retaddr);
 }
 
-tcg_target_ulong helper_le_ldul_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+tcg_target_ulong helper_le_ldul_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr)
 {
     return (int32_t)helper_le_ldul_mmu(env, addr, oi, retaddr);
 }
 
-tcg_target_ulong helper_be_lduw_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+tcg_target_ulong helper_be_lduw_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr)
 {
     return (int16_t)helper_be_lduw_mmu(env, addr, oi, retaddr);
 }
 
-tcg_target_ulong helper_be_ldul_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+tcg_target_ulong helper_be_ldul_mmu_signed(CPUArchState *env, target_ulong addr, MemOpIdx oi, uintptr_t retaddr)
 {
     return (int32_t)helper_be_ldul_mmu(env, addr, oi, retaddr);
 }

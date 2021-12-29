@@ -472,7 +472,7 @@
 ##
 { 'enum': 'VmnetOperatingMode',
   'data': [ 'host', 'shared', 'bridged' ],
-  'if': 'defined(CONFIG_VMNET)' }
+  'if': 'CONFIG_VMNET' }
 
 ##
 # @NetdevVmnetModeOptionsBridged:
@@ -488,7 +488,7 @@
 ##
 { 'struct': 'NetdevVmnetModeOptionsBridged',
   'data': { '*ifname':  'str' },
-  'if': 'defined(CONFIG_VMNET)' }
+  'if': 'CONFIG_VMNET' }
 
 ##
 # @NetdevVmnetModeOptionsHostOrShared:
@@ -523,7 +523,7 @@
     '*dhcp-start-address': 'str' ,
     '*dhcp-end-address':   'str',
     '*dhcp-subnet-mask':   'str' },
-  'if': 'defined(CONFIG_VMNET)' }
+  'if': 'CONFIG_VMNET' }
 
 ##
 # @NetdevVmnetModeOptions:
@@ -542,7 +542,7 @@
     'bridged':      'NetdevVmnetModeOptionsBridged',
     'host':         'NetdevVmnetModeOptionsHostOrShared',
     'shared':       'NetdevVmnetModeOptionsHostOrShared' },
-  'if': 'defined(CONFIG_VMNET)' }
+  'if': 'CONFIG_VMNET' }
 
 ##
 # @NetdevVmnetOptions:
@@ -559,7 +559,7 @@
 ##
 { 'struct': 'NetdevVmnetOptions',
   'data': {'options': 'NetdevVmnetModeOptions' },
-  'if': 'defined(CONFIG_VMNET)' }
+  'if': 'CONFIG_VMNET' }
 
 ##
 # @NetClientDriver:
@@ -575,7 +575,7 @@
 { 'enum': 'NetClientDriver',
   'data': [ 'none', 'nic', 'user', 'tap', 'l2tpv3', 'socket', 'vde',
             'bridge', 'hubport', 'netmap', 'vhost-user', 'vhost-vdpa',
-            { 'name': 'vmnet-macos', 'if': 'defined(CONFIG_VMNET)' } ] }
+            { 'name': 'vmnet-macos', 'if': 'CONFIG_VMNET' } ] }
 
 ##
 # @Netdev:
@@ -608,7 +608,7 @@
     'vhost-user': 'NetdevVhostUserOptions',
     'vhost-vdpa': 'NetdevVhostVDPAOptions',
     'vmnet-macos': { 'type': 'NetdevVmnetOptions',
-                     'if': 'defined(CONFIG_VMNET)' } } }
+                     'if': 'CONFIG_VMNET' } } }
 
 ##
 # @RxState:

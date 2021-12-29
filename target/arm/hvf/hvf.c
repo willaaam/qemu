@@ -29,6 +29,7 @@
 #include "target/arm/cpu.h"
 #include "target/arm/internals.h"
 #include "trace/trace-target_arm_hvf.h"
+#include "migration/vmstate.h"
 
 #define HVF_SYSREG(crn, crm, op0, op1, op2) \
         ENCODE_AA64_CP_REG(CP_REG_ARM64_SYSREG_CP, crn, crm, op0, op1, op2)
@@ -37,8 +38,22 @@
 #define SYSREG(op0, op1, crn, crm, op2) \
     ((op0 << 20) | (op2 << 17) | (op1 << 14) | (crn << 10) | (crm << 1))
 #define SYSREG_MASK           SYSREG(0x3, 0x7, 0xf, 0xf, 0x7)
+#define SYSREG_OSLAR_EL1      SYSREG(2, 0, 1, 0, 4)
+#define SYSREG_OSLSR_EL1      SYSREG(2, 0, 1, 1, 4)
+#define SYSREG_OSDLR_EL1      SYSREG(2, 0, 1, 3, 4)
 #define SYSREG_CNTPCT_EL0     SYSREG(3, 3, 14, 0, 1)
+#define SYSREG_PMCR_EL0       SYSREG(3, 3, 9, 12, 0)
+#define SYSREG_PMUSERENR_EL0  SYSREG(3, 3, 9, 14, 0)
+#define SYSREG_PMCNTENSET_EL0 SYSREG(3, 3, 9, 12, 1)
+#define SYSREG_PMCNTENCLR_EL0 SYSREG(3, 3, 9, 12, 2)
+#define SYSREG_PMINTENCLR_EL1 SYSREG(3, 0, 9, 14, 2)
+#define SYSREG_PMOVSCLR_EL0   SYSREG(3, 3, 9, 12, 3)
+#define SYSREG_PMSWINC_EL0    SYSREG(3, 3, 9, 12, 4)
+#define SYSREG_PMSELR_EL0     SYSREG(3, 3, 9, 12, 5)
+#define SYSREG_PMCEID0_EL0    SYSREG(3, 3, 9, 12, 6)
+#define SYSREG_PMCEID1_EL0    SYSREG(3, 3, 9, 12, 7)
 #define SYSREG_PMCCNTR_EL0    SYSREG(3, 3, 9, 13, 0)
+#define SYSREG_PMCCFILTR_EL0  SYSREG(3, 3, 14, 15, 7)
 
 #define WFX_IS_WFE (1 << 0)
 
@@ -47,6 +62,13 @@
 #define TMR_CTL_ISTATUS (1 << 2)
 
 static void hvf_wfi(CPUState *cpu);
+
+typedef struct HVFVTimer {
+    /* Vtimer value during migration and paused state */
+    uint64_t vtimer_val;
+} HVFVTimer;
+
+static HVFVTimer vtimer;
 
 typedef struct ARMHostCPUFeatures {
     ARMISARegisters isar;
@@ -136,9 +158,10 @@ static const struct hvf_reg_match hvf_fpreg_match[] = {
 struct hvf_sreg_match {
     int reg;
     uint32_t key;
+    uint32_t cp_idx;
 };
 
-static const struct hvf_sreg_match hvf_sreg_match[] = {
+static struct hvf_sreg_match hvf_sreg_match[] = {
     { HV_SYS_REG_DBGBVR0_EL1, HVF_SYSREG(0, 0, 14, 0, 4) },
     { HV_SYS_REG_DBGBCR0_EL1, HVF_SYSREG(0, 0, 14, 0, 5) },
     { HV_SYS_REG_DBGWVR0_EL1, HVF_SYSREG(0, 0, 14, 0, 6) },
@@ -259,7 +282,7 @@ static const struct hvf_sreg_match hvf_sreg_match[] = {
     { HV_SYS_REG_APGAKEYLO_EL1, HVF_SYSREG(2, 3, 3, 0, 0) },
     { HV_SYS_REG_APGAKEYHI_EL1, HVF_SYSREG(2, 3, 3, 0, 1) },
 
-    { HV_SYS_REG_SPSR_EL1, HVF_SYSREG(4, 0, 3, 1, 0) },
+    { HV_SYS_REG_SPSR_EL1, HVF_SYSREG(4, 0, 3, 0, 0) },
     { HV_SYS_REG_ELR_EL1, HVF_SYSREG(4, 0, 3, 0, 1) },
     { HV_SYS_REG_SP_EL0, HVF_SYSREG(4, 1, 3, 0, 0) },
     { HV_SYS_REG_AFSR0_EL1, HVF_SYSREG(5, 1, 3, 0, 0) },
@@ -318,12 +341,18 @@ int hvf_get_registers(CPUState *cpu)
     pstate_write(env, val);
 
     for (i = 0; i < ARRAY_SIZE(hvf_sreg_match); i++) {
+        if (hvf_sreg_match[i].cp_idx == -1) {
+            continue;
+        }
+
         ret = hv_vcpu_get_sys_reg(cpu->hvf->fd, hvf_sreg_match[i].reg, &val);
         assert_hvf_ok(ret);
 
-        arm_cpu->cpreg_values[i] = val;
+        arm_cpu->cpreg_values[hvf_sreg_match[i].cp_idx] = val;
     }
-    write_list_to_cpustate(arm_cpu);
+    assert(write_list_to_cpustate(arm_cpu));
+
+    aarch64_restore_sp(env, arm_current_el(env));
 
     return 0;
 }
@@ -359,12 +388,21 @@ int hvf_put_registers(CPUState *cpu)
     ret = hv_vcpu_set_reg(cpu->hvf->fd, HV_REG_CPSR, pstate_read(env));
     assert_hvf_ok(ret);
 
-    write_cpustate_to_list(arm_cpu, false);
+    aarch64_save_sp(env, arm_current_el(env));
+
+    assert(write_cpustate_to_list(arm_cpu, false));
     for (i = 0; i < ARRAY_SIZE(hvf_sreg_match); i++) {
-        val = arm_cpu->cpreg_values[i];
+        if (hvf_sreg_match[i].cp_idx == -1) {
+            continue;
+        }
+
+        val = arm_cpu->cpreg_values[hvf_sreg_match[i].cp_idx];
         ret = hv_vcpu_set_sys_reg(cpu->hvf->fd, hvf_sreg_match[i].reg, val);
         assert_hvf_ok(ret);
     }
+
+    ret = hv_vcpu_set_vtimer_offset(cpu->hvf->fd, hvf_state->vtimer_offset);
+    assert_hvf_ok(ret);
 
     return 0;
 }
@@ -404,9 +442,9 @@ static uint64_t hvf_get_reg(CPUState *cpu, int rt)
     return val;
 }
 
-static void hvf_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
+static bool hvf_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
 {
-    ARMISARegisters host_isar;
+    ARMISARegisters host_isar = {};
     const struct isar_regs {
         int reg;
         uint64_t *val;
@@ -422,6 +460,7 @@ static void hvf_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
         { HV_SYS_REG_ID_AA64MMFR2_EL1, &host_isar.id_aa64mmfr2 },
     };
     hv_vcpu_t fd;
+    hv_return_t r = HV_SUCCESS;
     hv_vcpu_exit_t *exit;
     int i;
 
@@ -434,28 +473,50 @@ static void hvf_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
 
     /* We set up a small vcpu to extract host registers */
 
-    assert_hvf_ok(hv_vcpu_create(&fd, &exit, NULL));
-    for (i = 0; i < ARRAY_SIZE(regs); i++) {
-        assert_hvf_ok(hv_vcpu_get_sys_reg(fd, regs[i].reg, regs[i].val));
+    if (hv_vcpu_create(&fd, &exit, NULL) != HV_SUCCESS) {
+        return false;
     }
-    assert_hvf_ok(hv_vcpu_get_sys_reg(fd, HV_SYS_REG_MIDR_EL1, &ahcf->midr));
-    assert_hvf_ok(hv_vcpu_destroy(fd));
+
+    for (i = 0; i < ARRAY_SIZE(regs); i++) {
+        r |= hv_vcpu_get_sys_reg(fd, regs[i].reg, regs[i].val);
+    }
+    r |= hv_vcpu_get_sys_reg(fd, HV_SYS_REG_MIDR_EL1, &ahcf->midr);
+    r |= hv_vcpu_destroy(fd);
 
     ahcf->isar = host_isar;
-    ahcf->reset_sctlr = 0x00c50078;
+
+    /*
+     * A scratch vCPU returns SCTLR 0, so let's fill our default with the M1
+     * boot SCTLR from https://github.com/AsahiLinux/m1n1/issues/97
+     */
+    ahcf->reset_sctlr = 0x30100180;
+    /*
+     * SPAN is disabled by default when SCTLR.SPAN=1. To improve compatibility,
+     * let's disable it on boot and then allow guest software to turn it on by
+     * setting it to 0.
+     */
+    ahcf->reset_sctlr |= 0x00800000;
 
     /* Make sure we don't advertise AArch32 support for EL0/EL1 */
-    g_assert((host_isar.id_aa64pfr0 & 0xff) == 0x11);
+    if ((host_isar.id_aa64pfr0 & 0xff) != 0x11) {
+        return false;
+    }
+
+    return r == HV_SUCCESS;
 }
 
 void hvf_arm_set_cpu_features_from_host(ARMCPU *cpu)
 {
     if (!arm_host_cpu_features.dtb_compatible) {
-        if (!hvf_enabled()) {
+        if (!hvf_enabled() ||
+            !hvf_arm_get_host_cpu_features(&arm_host_cpu_features)) {
+            /*
+             * We can't report this error yet, so flag that we need to
+             * in arm_cpu_realizefn().
+             */
             cpu->host_cpu_probe_failed = true;
             return;
         }
-        hvf_arm_get_host_cpu_features(&arm_host_cpu_features);
     }
 
     cpu->dtb_compatible = arm_host_cpu_features.dtb_compatible;
@@ -474,6 +535,7 @@ int hvf_arch_init_vcpu(CPUState *cpu)
     ARMCPU *arm_cpu = ARM_CPU(cpu);
     CPUARMState *env = &arm_cpu->env;
     uint32_t sregs_match_len = ARRAY_SIZE(hvf_sreg_match);
+    uint32_t sregs_cnt = 0;
     uint64_t pfr;
     hv_return_t ret;
     int i;
@@ -494,21 +556,25 @@ int hvf_arch_init_vcpu(CPUState *cpu)
                                             sregs_match_len);
 
     memset(arm_cpu->cpreg_values, 0, sregs_match_len * sizeof(uint64_t));
-    arm_cpu->cpreg_array_len = sregs_match_len;
-    arm_cpu->cpreg_vmstate_array_len = sregs_match_len;
 
     /* Populate cp list for all known sysregs */
     for (i = 0; i < sregs_match_len; i++) {
         const ARMCPRegInfo *ri;
+        uint32_t key = hvf_sreg_match[i].key;
 
-        arm_cpu->cpreg_indexes[i] = cpreg_to_kvm_id(hvf_sreg_match[i].key);
-
-        ri = get_arm_cp_reginfo(arm_cpu->cp_regs, hvf_sreg_match[i].key);
+        ri = get_arm_cp_reginfo(arm_cpu->cp_regs, key);
         if (ri) {
             assert(!(ri->type & ARM_CP_NO_RAW));
+            hvf_sreg_match[i].cp_idx = sregs_cnt;
+            arm_cpu->cpreg_indexes[sregs_cnt++] = cpreg_to_kvm_id(key);
+        } else {
+            hvf_sreg_match[i].cp_idx = -1;
         }
     }
-    write_cpustate_to_list(arm_cpu, false);
+    arm_cpu->cpreg_array_len = sregs_cnt;
+    arm_cpu->cpreg_vmstate_array_len = sregs_cnt;
+
+    assert(write_cpustate_to_list(arm_cpu, false));
 
     /* Set CP_NO_RAW system registers on init */
     ret = hv_vcpu_set_sys_reg(cpu->hvf->fd, HV_SYS_REG_MIDR_EL1,
@@ -539,33 +605,32 @@ void hvf_kick_vcpu_thread(CPUState *cpu)
     hv_vcpus_exit(&cpu->hvf->fd, 1);
 }
 
-static void hvf_raise_exception(CPUARMState *env, uint32_t excp,
+static void hvf_raise_exception(CPUState *cpu, uint32_t excp,
                                 uint32_t syndrome)
 {
-    unsigned int new_el = 1;
-    unsigned int old_mode = pstate_read(env);
-    unsigned int new_mode = aarch64_pstate_mode(new_el, true);
-    target_ulong addr = env->cp15.vbar_el[new_el];
+    ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
 
-    env->cp15.esr_el[new_el] = syndrome;
-    aarch64_save_sp(env, arm_current_el(env));
-    env->elr_el[new_el] = env->pc;
-    env->banked_spsr[aarch64_banked_spsr_index(new_el)] = old_mode;
-    pstate_write(env, PSTATE_DAIF | new_mode);
-    aarch64_restore_sp(env, new_el);
-    env->pc = addr;
+    cpu->exception_index = excp;
+    env->exception.target_el = 1;
+    env->exception.syndrome = syndrome;
+
+    arm_cpu_do_interrupt(cpu);
 }
 
-static int hvf_psci_cpu_off(ARMCPU *arm_cpu)
+static void hvf_psci_cpu_off(ARMCPU *arm_cpu)
 {
-    int32_t ret = 0;
-    ret = arm_set_cpu_off(arm_cpu->mp_affinity);
+    int32_t ret = arm_set_cpu_off(arm_cpu->mp_affinity);
     assert(ret == QEMU_ARM_POWERCTL_RET_SUCCESS);
-
-    return 0;
 }
 
-static int hvf_handle_psci_call(CPUState *cpu)
+/*
+ * Handle a PSCI call.
+ *
+ * Returns 0 on success
+ *         -1 when the PSCI call is unknown,
+ */
+static bool hvf_handle_psci_call(CPUState *cpu)
 {
     ARMCPU *arm_cpu = ARM_CPU(cpu);
     CPUARMState *env = &arm_cpu->env;
@@ -615,15 +680,18 @@ static int hvf_handle_psci_call(CPUState *cpu)
         break;
     case QEMU_PSCI_0_2_FN_SYSTEM_RESET:
         qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
-        /* QEMU reset and shutdown are async requests, but PSCI
+        /*
+         * QEMU reset and shutdown are async requests, but PSCI
          * mandates that we never return from the reset/shutdown
          * call, so power the CPU off now so it doesn't execute
          * anything further.
          */
-        return hvf_psci_cpu_off(arm_cpu);
+        hvf_psci_cpu_off(arm_cpu);
+        break;
     case QEMU_PSCI_0_2_FN_SYSTEM_OFF:
         qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
-        return hvf_psci_cpu_off(arm_cpu);
+        hvf_psci_cpu_off(arm_cpu);
+        break;
     case QEMU_PSCI_0_1_FN_CPU_ON:
     case QEMU_PSCI_0_2_FN_CPU_ON:
     case QEMU_PSCI_0_2_FN64_CPU_ON:
@@ -635,7 +703,8 @@ static int hvf_handle_psci_call(CPUState *cpu)
         break;
     case QEMU_PSCI_0_1_FN_CPU_OFF:
     case QEMU_PSCI_0_2_FN_CPU_OFF:
-        return hvf_psci_cpu_off(arm_cpu);
+        hvf_psci_cpu_off(arm_cpu);
+        break;
     case QEMU_PSCI_0_1_FN_CPU_SUSPEND:
     case QEMU_PSCI_0_2_FN_CPU_SUSPEND:
     case QEMU_PSCI_0_2_FN64_CPU_SUSPEND:
@@ -653,16 +722,17 @@ static int hvf_handle_psci_call(CPUState *cpu)
         ret = QEMU_PSCI_RET_NOT_SUPPORTED;
         break;
     default:
-        return 1;
+        return false;
     }
 
     env->xregs[0] = ret;
-    return 0;
+    return true;
 }
 
-static uint64_t hvf_sysreg_read(CPUState *cpu, uint32_t reg)
+static int hvf_sysreg_read(CPUState *cpu, uint32_t reg, uint32_t rt)
 {
     ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
     uint64_t val = 0;
 
     switch (reg) {
@@ -670,36 +740,236 @@ static uint64_t hvf_sysreg_read(CPUState *cpu, uint32_t reg)
         val = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) /
               gt_cntfrq_period_ns(arm_cpu);
         break;
+    case SYSREG_PMCR_EL0:
+        val = env->cp15.c9_pmcr;
+        break;
     case SYSREG_PMCCNTR_EL0:
-        val = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        pmu_op_start(env);
+        val = env->cp15.c15_ccnt;
+        pmu_op_finish(env);
+        break;
+    case SYSREG_PMCNTENCLR_EL0:
+        val = env->cp15.c9_pmcnten;
+        break;
+    case SYSREG_PMOVSCLR_EL0:
+        val = env->cp15.c9_pmovsr;
+        break;
+    case SYSREG_PMSELR_EL0:
+        val = env->cp15.c9_pmselr;
+        break;
+    case SYSREG_PMINTENCLR_EL1:
+        val = env->cp15.c9_pminten;
+        break;
+    case SYSREG_PMCCFILTR_EL0:
+        val = env->cp15.pmccfiltr_el0;
+        break;
+    case SYSREG_PMCNTENSET_EL0:
+        val = env->cp15.c9_pmcnten;
+        break;
+    case SYSREG_PMUSERENR_EL0:
+        val = env->cp15.c9_pmuserenr;
+        break;
+    case SYSREG_PMCEID0_EL0:
+    case SYSREG_PMCEID1_EL0:
+        /* We can't really count anything yet, declare all events invalid */
+        val = 0;
+        break;
+    case SYSREG_OSLSR_EL1:
+        val = env->cp15.oslsr_el1;
+        break;
+    case SYSREG_OSDLR_EL1:
+        /* Dummy register */
         break;
     default:
-        trace_hvf_unhandled_sysreg_read(reg,
+        cpu_synchronize_state(cpu);
+        trace_hvf_unhandled_sysreg_read(env->pc, reg,
                                         (reg >> 20) & 0x3,
                                         (reg >> 14) & 0x7,
                                         (reg >> 10) & 0xf,
                                         (reg >> 1) & 0xf,
                                         (reg >> 17) & 0x7);
-        break;
+        hvf_raise_exception(cpu, EXCP_UDEF, syn_uncategorized());
+        return 1;
     }
 
-    return val;
+    trace_hvf_sysreg_read(reg,
+                          (reg >> 20) & 0x3,
+                          (reg >> 14) & 0x7,
+                          (reg >> 10) & 0xf,
+                          (reg >> 1) & 0xf,
+                          (reg >> 17) & 0x7,
+                          val);
+    hvf_set_reg(cpu, rt, val);
+
+    return 0;
 }
 
-static void hvf_sysreg_write(CPUState *cpu, uint32_t reg, uint64_t val)
+static void pmu_update_irq(CPUARMState *env)
 {
+    ARMCPU *cpu = env_archcpu(env);
+    qemu_set_irq(cpu->pmu_interrupt, (env->cp15.c9_pmcr & PMCRE) &&
+            (env->cp15.c9_pminten & env->cp15.c9_pmovsr));
+}
+
+static bool pmu_event_supported(uint16_t number)
+{
+    return false;
+}
+
+/* Returns true if the counter (pass 31 for PMCCNTR) should count events using
+ * the current EL, security state, and register configuration.
+ */
+static bool pmu_counter_enabled(CPUARMState *env, uint8_t counter)
+{
+    uint64_t filter;
+    bool enabled, filtered = true;
+    int el = arm_current_el(env);
+
+    enabled = (env->cp15.c9_pmcr & PMCRE) &&
+              (env->cp15.c9_pmcnten & (1 << counter));
+
+    if (counter == 31) {
+        filter = env->cp15.pmccfiltr_el0;
+    } else {
+        filter = env->cp15.c14_pmevtyper[counter];
+    }
+
+    if (el == 0) {
+        filtered = filter & PMXEVTYPER_U;
+    } else if (el == 1) {
+        filtered = filter & PMXEVTYPER_P;
+    }
+
+    if (counter != 31) {
+        /*
+         * If not checking PMCCNTR, ensure the counter is setup to an event we
+         * support
+         */
+        uint16_t event = filter & PMXEVTYPER_EVTCOUNT;
+        if (!pmu_event_supported(event)) {
+            return false;
+        }
+    }
+
+    return enabled && !filtered;
+}
+
+static void pmswinc_write(CPUARMState *env, uint64_t value)
+{
+    unsigned int i;
+    for (i = 0; i < pmu_num_counters(env); i++) {
+        /* Increment a counter's count iff: */
+        if ((value & (1 << i)) && /* counter's bit is set */
+                /* counter is enabled and not filtered */
+                pmu_counter_enabled(env, i) &&
+                /* counter is SW_INCR */
+                (env->cp15.c14_pmevtyper[i] & PMXEVTYPER_EVTCOUNT) == 0x0) {
+            /*
+             * Detect if this write causes an overflow since we can't predict
+             * PMSWINC overflows like we can for other events
+             */
+            uint32_t new_pmswinc = env->cp15.c14_pmevcntr[i] + 1;
+
+            if (env->cp15.c14_pmevcntr[i] & ~new_pmswinc & INT32_MIN) {
+                env->cp15.c9_pmovsr |= (1 << i);
+                pmu_update_irq(env);
+            }
+
+            env->cp15.c14_pmevcntr[i] = new_pmswinc;
+        }
+    }
+}
+
+static int hvf_sysreg_write(CPUState *cpu, uint32_t reg, uint64_t val)
+{
+    ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
+
+    trace_hvf_sysreg_write(reg,
+                           (reg >> 20) & 0x3,
+                           (reg >> 14) & 0x7,
+                           (reg >> 10) & 0xf,
+                           (reg >> 1) & 0xf,
+                           (reg >> 17) & 0x7,
+                           val);
+
     switch (reg) {
-    case SYSREG_CNTPCT_EL0:
+    case SYSREG_PMCCNTR_EL0:
+        pmu_op_start(env);
+        env->cp15.c15_ccnt = val;
+        pmu_op_finish(env);
+        break;
+    case SYSREG_PMCR_EL0:
+        pmu_op_start(env);
+
+        if (val & PMCRC) {
+            /* The counter has been reset */
+            env->cp15.c15_ccnt = 0;
+        }
+
+        if (val & PMCRP) {
+            unsigned int i;
+            for (i = 0; i < pmu_num_counters(env); i++) {
+                env->cp15.c14_pmevcntr[i] = 0;
+            }
+        }
+
+        env->cp15.c9_pmcr &= ~PMCR_WRITEABLE_MASK;
+        env->cp15.c9_pmcr |= (val & PMCR_WRITEABLE_MASK);
+
+        pmu_op_finish(env);
+        break;
+    case SYSREG_PMUSERENR_EL0:
+        env->cp15.c9_pmuserenr = val & 0xf;
+        break;
+    case SYSREG_PMCNTENSET_EL0:
+        env->cp15.c9_pmcnten |= (val & pmu_counter_mask(env));
+        break;
+    case SYSREG_PMCNTENCLR_EL0:
+        env->cp15.c9_pmcnten &= ~(val & pmu_counter_mask(env));
+        break;
+    case SYSREG_PMINTENCLR_EL1:
+        pmu_op_start(env);
+        env->cp15.c9_pminten |= val;
+        pmu_op_finish(env);
+        break;
+    case SYSREG_PMOVSCLR_EL0:
+        pmu_op_start(env);
+        env->cp15.c9_pmovsr &= ~val;
+        pmu_op_finish(env);
+        break;
+    case SYSREG_PMSWINC_EL0:
+        pmu_op_start(env);
+        pmswinc_write(env, val);
+        pmu_op_finish(env);
+        break;
+    case SYSREG_PMSELR_EL0:
+        env->cp15.c9_pmselr = val & 0x1f;
+        break;
+    case SYSREG_PMCCFILTR_EL0:
+        pmu_op_start(env);
+        env->cp15.pmccfiltr_el0 = val & PMCCFILTR_EL0;
+        pmu_op_finish(env);
+        break;
+    case SYSREG_OSLAR_EL1:
+        env->cp15.oslsr_el1 = val & 1;
+        break;
+    case SYSREG_OSDLR_EL1:
+        /* Dummy register */
         break;
     default:
-        trace_hvf_unhandled_sysreg_write(reg,
+        cpu_synchronize_state(cpu);
+        trace_hvf_unhandled_sysreg_write(env->pc, reg,
                                          (reg >> 20) & 0x3,
                                          (reg >> 14) & 0x7,
                                          (reg >> 10) & 0xf,
                                          (reg >> 1) & 0xf,
                                          (reg >> 17) & 0x7);
-        break;
+        hvf_raise_exception(cpu, EXCP_UDEF, syn_uncategorized());
+        return 1;
     }
+
+    return 0;
 }
 
 static int hvf_inject_interrupts(CPUState *cpu)
@@ -719,6 +989,25 @@ static int hvf_inject_interrupts(CPUState *cpu)
     return 0;
 }
 
+static uint64_t hvf_vtimer_val_raw(void)
+{
+    /*
+     * mach_absolute_time() returns the vtimer value without the VM
+     * offset that we define. Add our own offset on top.
+     */
+    return mach_absolute_time() - hvf_state->vtimer_offset;
+}
+
+static uint64_t hvf_vtimer_val(void)
+{
+    if (!runstate_is_running()) {
+        /* VM is paused, the vtimer value is in vtimer.vtimer_val */
+        return vtimer.vtimer_val;
+    }
+
+    return hvf_vtimer_val_raw();
+}
+
 static void hvf_wait_for_ipi(CPUState *cpu, struct timespec *ts)
 {
     /*
@@ -734,16 +1023,21 @@ static void hvf_wait_for_ipi(CPUState *cpu, struct timespec *ts)
 static void hvf_wfi(CPUState *cpu)
 {
     ARMCPU *arm_cpu = ARM_CPU(cpu);
+    struct timespec ts;
     hv_return_t r;
     uint64_t ctl;
+    uint64_t cval;
+    int64_t ticks_to_sleep;
+    uint64_t seconds;
+    uint64_t nanos;
+    uint32_t cntfrq;
 
     if (cpu->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_FIQ)) {
         /* Interrupt pending, no need to wait */
         return;
     }
 
-    r = hv_vcpu_get_sys_reg(cpu->hvf->fd, HV_SYS_REG_CNTV_CTL_EL0,
-                            &ctl);
+    r = hv_vcpu_get_sys_reg(cpu->hvf->fd, HV_SYS_REG_CNTV_CTL_EL0, &ctl);
     assert_hvf_ok(r);
 
     if (!(ctl & 1) || (ctl & 2)) {
@@ -752,31 +1046,29 @@ static void hvf_wfi(CPUState *cpu)
         return;
     }
 
-    uint64_t cval;
-    r = hv_vcpu_get_sys_reg(cpu->hvf->fd, HV_SYS_REG_CNTV_CVAL_EL0,
-                            &cval);
+    r = hv_vcpu_get_sys_reg(cpu->hvf->fd, HV_SYS_REG_CNTV_CVAL_EL0, &cval);
     assert_hvf_ok(r);
 
-    int64_t ticks_to_sleep = cval - mach_absolute_time();
+    ticks_to_sleep = cval - hvf_vtimer_val();
     if (ticks_to_sleep < 0) {
         return;
     }
 
-    uint64_t seconds = ticks_to_sleep / arm_cpu->gt_cntfrq_hz;
-    uint64_t nanos =
-        (ticks_to_sleep - arm_cpu->gt_cntfrq_hz * seconds) *
-        1000000000 / arm_cpu->gt_cntfrq_hz;
+    cntfrq = gt_cntfrq_period_ns(arm_cpu);
+    seconds = muldiv64(ticks_to_sleep, cntfrq, NANOSECONDS_PER_SECOND);
+    ticks_to_sleep -= muldiv64(seconds, NANOSECONDS_PER_SECOND, cntfrq);
+    nanos = ticks_to_sleep * cntfrq;
 
     /*
      * Don't sleep for less than the time a context switch would take,
      * so that we can satisfy fast timer requests on the same CPU.
      * Measurements on M1 show the sweet spot to be ~2ms.
      */
-    if (!seconds && nanos < 2000000) {
+    if (!seconds && nanos < (2 * SCALE_MS)) {
         return;
     }
 
-    struct timespec ts = { seconds, nanos };
+    ts = (struct timespec) { seconds, nanos };
     hvf_wait_for_ipi(cpu, &ts);
 }
 
@@ -814,19 +1106,15 @@ int hvf_vcpu_exec(CPUState *cpu)
     hv_return_t r;
     bool advance_pc = false;
 
-    flush_cpu_state(cpu);
-
-    hvf_sync_vtimer(cpu);
-
     if (hvf_inject_interrupts(cpu)) {
         return EXCP_INTERRUPT;
     }
 
     if (cpu->halted) {
-        /* On unhalt, we usually have CPU state changes. Prepare for them. */
-        cpu_synchronize_state(cpu);
         return EXCP_HLT;
     }
+
+    flush_cpu_state(cpu);
 
     qemu_mutex_unlock_iothread();
     assert_hvf_ok(hv_vcpu_run(cpu->hvf->fd));
@@ -852,6 +1140,8 @@ int hvf_vcpu_exec(CPUState *cpu)
         assert(0);
     }
 
+    hvf_sync_vtimer(cpu);
+
     switch (ec) {
     case EC_DATAABORT: {
         bool isv = syndrome & ARM_EL_ISV;
@@ -860,11 +1150,18 @@ int hvf_vcpu_exec(CPUState *cpu)
         uint32_t sas = (syndrome >> 22) & 3;
         uint32_t len = 1 << sas;
         uint32_t srt = (syndrome >> 16) & 0x1f;
+        uint32_t cm = (syndrome >> 8) & 0x1;
         uint64_t val = 0;
 
         trace_hvf_data_abort(env->pc, hvf_exit->exception.virtual_address,
                              hvf_exit->exception.physical_address, isv,
                              iswrite, s1ptw, len, srt);
+
+        if (cm) {
+            /* We don't cache MMIO regions */
+            advance_pc = true;
+            break;
+        }
 
         assert(isv);
 
@@ -887,31 +1184,17 @@ int hvf_vcpu_exec(CPUState *cpu)
         bool isread = (syndrome >> 0) & 1;
         uint32_t rt = (syndrome >> 5) & 0x1f;
         uint32_t reg = syndrome & SYSREG_MASK;
-        uint64_t val = 0;
+        uint64_t val;
+        int ret = 0;
 
         if (isread) {
-            val = hvf_sysreg_read(cpu, reg);
-            trace_hvf_sysreg_read(reg,
-                                  (reg >> 20) & 0x3,
-                                  (reg >> 14) & 0x7,
-                                  (reg >> 10) & 0xf,
-                                  (reg >> 1) & 0xf,
-                                  (reg >> 17) & 0x7,
-                                  val);
-            hvf_set_reg(cpu, rt, val);
+            ret = hvf_sysreg_read(cpu, reg, rt);
         } else {
             val = hvf_get_reg(cpu, rt);
-            trace_hvf_sysreg_write(reg,
-                                   (reg >> 20) & 0x3,
-                                   (reg >> 14) & 0x7,
-                                   (reg >> 10) & 0xf,
-                                   (reg >> 1) & 0xf,
-                                   (reg >> 17) & 0x7,
-                                   val);
-            hvf_sysreg_write(cpu, reg, val);
+            ret = hvf_sysreg_write(cpu, reg, val);
         }
 
-        advance_pc = true;
+        advance_pc = !ret;
         break;
     }
     case EC_WFX_TRAP:
@@ -922,28 +1205,36 @@ int hvf_vcpu_exec(CPUState *cpu)
         break;
     case EC_AA64_HVC:
         cpu_synchronize_state(cpu);
-        if (hvf_handle_psci_call(cpu)) {
-            trace_hvf_unknown_hvf(env->xregs[0]);
-            hvf_raise_exception(env, EXCP_UDEF, syn_uncategorized());
+        if (arm_cpu->psci_conduit == QEMU_PSCI_CONDUIT_HVC) {
+            if (!hvf_handle_psci_call(cpu)) {
+                trace_hvf_unknown_hvc(env->xregs[0]);
+                /* SMCCC 1.3 section 5.2 says every unknown SMCCC call returns -1 */
+                env->xregs[0] = -1;
+            }
+        } else {
+            trace_hvf_unknown_hvc(env->xregs[0]);
+            hvf_raise_exception(cpu, EXCP_UDEF, syn_uncategorized());
         }
         break;
     case EC_AA64_SMC:
         cpu_synchronize_state(cpu);
-        if (!hvf_handle_psci_call(cpu)) {
+        if (arm_cpu->psci_conduit == QEMU_PSCI_CONDUIT_SMC) {
             advance_pc = true;
-        } else if (env->xregs[0] == QEMU_SMCCC_TC_WINDOWS10_BOOT) {
-            /* This special SMC is called by Windows 10 on boot. Return error */
-            env->xregs[0] = -1;
-            advance_pc = true;
+
+            if (!hvf_handle_psci_call(cpu)) {
+                trace_hvf_unknown_smc(env->xregs[0]);
+                /* SMCCC 1.3 section 5.2 says every unknown SMCCC call returns -1 */
+                env->xregs[0] = -1;
+            }
         } else {
             trace_hvf_unknown_smc(env->xregs[0]);
-            hvf_raise_exception(env, EXCP_UDEF, syn_uncategorized());
+            hvf_raise_exception(cpu, EXCP_UDEF, syn_uncategorized());
         }
         break;
     default:
         cpu_synchronize_state(cpu);
         trace_hvf_exit(syndrome, ec, env->pc);
-        error_report("0x%llx: unhandled exit 0x%llx", env->pc, exit_reason);
+        error_report("0x%llx: unhandled exception ec=0x%x", env->pc, ec);
     }
 
     if (advance_pc) {
@@ -958,5 +1249,37 @@ int hvf_vcpu_exec(CPUState *cpu)
         assert_hvf_ok(r);
     }
 
+    return 0;
+}
+
+static const VMStateDescription vmstate_hvf_vtimer = {
+    .name = "hvf-vtimer",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT64(vtimer_val, HVFVTimer),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
+static void hvf_vm_state_change(void *opaque, bool running, RunState state)
+{
+    HVFVTimer *s = opaque;
+
+    if (running) {
+        /* Update vtimer offset on all CPUs */
+        hvf_state->vtimer_offset = mach_absolute_time() - s->vtimer_val;
+        cpu_synchronize_all_states();
+    } else {
+        /* Remember vtimer value on every pause */
+        s->vtimer_val = hvf_vtimer_val_raw();
+    }
+}
+
+int hvf_arch_init(void)
+{
+    hvf_state->vtimer_offset = mach_absolute_time();
+    vmstate_register(NULL, 0, &vmstate_hvf_vtimer, &vtimer);
+    qemu_add_vm_change_state_handler(hvf_vm_state_change, &vtimer);
     return 0;
 }
