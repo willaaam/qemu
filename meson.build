@@ -3072,6 +3072,10 @@ if xkbcommon.found()
 endif
 
 if have_tools
+  if config_all.has_key('CONFIG_SHARED_LIBRARY_BUILD')
+    qemu_img_lib = shared_library('qemu-img', [files('qemu-img.c'), hxdep],
+             dependencies: [authz, block, crypto, io, qom, qemuutil], install: true)
+  endif
   qemu_img = executable('qemu-img', [files('qemu-img.c'), hxdep],
              dependencies: [authz, block, crypto, io, qom, qemuutil], install: true)
   qemu_io = executable('qemu-io', files('qemu-io.c'),
