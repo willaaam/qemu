@@ -890,6 +890,13 @@ static void spice_iosurface_destroy(SimpleSpiceDisplay *ssd)
     qemu_egl_destroy_surface(ssd->esurface);
     ssd->esurface = EGL_NO_SURFACE;
 #endif
+    if (ssd->surface_send_fd > -1) {
+        // this sends POLLHUP and indicates that any unread data is stale
+        // and should not be used
+        close(ssd->surface_send_fd);
+        ssd->surface_send_fd = -1;
+    }
+    // FIXME: still a tiny race with the close() above
     CFRelease(ssd->iosurface);
     ssd->iosurface = NULL;
 }
@@ -922,10 +929,16 @@ static int spice_iosurface_create_fd(SimpleSpiceDisplay *ssd, int *fourcc)
         error_report("spice_iosurface_create_fd: failed to create pipe");
         return -1;
     }
+    if (ssd->surface_send_fd > -1) {
+        close(ssd->surface_send_fd);
+    }
+    // we keep the write end of the pipe open for the lifetime of this surface
+    // when we close it, POLLHUP will be seen by the other side and know that
+    // the surface ID is stale and should not be used
+    ssd->surface_send_fd = fds[1];
     *fourcc = 'BGRA';
     surfaceid = IOSurfaceGetID(ssd->iosurface);
-    write(fds[1], &surfaceid, sizeof(surfaceid));
-    close(fds[1]);
+    write(ssd->surface_send_fd, &surfaceid, sizeof(surfaceid));
     return fds[0];
 }
 
@@ -1381,6 +1394,7 @@ static void qemu_spice_display_init_one(QemuConsole *con)
         ssd->have_scanout = false;
 #if defined(CONFIG_IOSURFACE)
         ssd->iosurface = NULL;
+        ssd->surface_send_fd = -1;
 #endif
 #if defined(CONFIG_ANGLE)
         ssd->esurface = EGL_NO_SURFACE;
