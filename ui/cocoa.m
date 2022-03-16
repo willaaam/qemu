@@ -325,6 +325,19 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     [self removeTrackingRect];
 }
 
+- (void) selectConsoleLocked:(unsigned int)index
+{
+    QemuConsole *con = qemu_console_lookup_by_index(index);
+    if (!con) {
+        return;
+    }
+
+    unregister_displaychangelistener(&dcl);
+    dcl.con = con;
+    register_displaychangelistener(&dcl);
+    [self updateUIInfo];
+}
+
 - (void) hideCursor
 {
     if (!cursor_hide) {
@@ -608,7 +621,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     }
 
     if (keysym) {
-        kbd_put_keysym(keysym);
+        kbd_put_keysym_console(dcl.con, keysym);
     }
 }
 
@@ -798,7 +811,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
                         // enable graphic console
                         case '1' ... '9':
-                            console_select(key - '0' - 1); /* ascii math */
+                            [self selectConsoleLocked:key - '0' - 1]; /* ascii math */
                             return true;
 
                         // release the mouse grab
@@ -809,7 +822,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                 }
             }
 
-            if (qemu_console_is_graphic(NULL)) {
+            if (qemu_console_is_graphic(dcl.con)) {
                 qkbd_state_key_event(kbd, keycode, true);
             } else {
                 [self handleMonitorInput: event];
@@ -824,7 +837,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                 return true;
             }
 
-            if (qemu_console_is_graphic(NULL)) {
+            if (qemu_console_is_graphic(dcl.con)) {
                 qkbd_state_key_event(kbd, keycode, false);
             }
             return true;
@@ -1106,8 +1119,11 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     COCOA_DEBUG("QemuCocoaAppController: applicationDidFinishLaunching\n");
     allow_events = true;
 
+    dcl.con = qemu_console_lookup_first_graphic_console();
+
     // register vga output callbacks
     register_displaychangelistener(&dcl);
+    [cocoaView updateUIInfo];
 
     qemu_clipboard_peer_register(&cbpeer);
 
@@ -1274,7 +1290,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 - (void)displayConsole:(id)sender
 {
     with_iothread_lock(^{
-        console_select([sender tag]);
+        [cocoaView selectConsoleLocked:[sender tag]];
     });
 }
 
@@ -1816,7 +1832,6 @@ static void cocoa_switch(DisplayChangeListener *dcl,
     pixman_image_ref(image);
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        [cocoaView updateUIInfo];
         [cocoaView switchSurface:image];
     });
 }
@@ -1826,7 +1841,7 @@ static void cocoa_refresh(DisplayChangeListener *dcl)
     NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
 
     COCOA_DEBUG("qemu_cocoa: cocoa_refresh\n");
-    graphic_hw_update(NULL);
+    graphic_hw_update(dcl->con);
 
     if (qemu_input_is_absolute()) {
         dispatch_async(dispatch_get_main_queue(), ^{
