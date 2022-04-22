@@ -33,6 +33,7 @@
 #include "sysemu/runstate-action.h"
 #include "sysemu/sysemu.h"
 #include "ui/win32-kbd-hook.h"
+#include "qemu/log.h"
 
 static int sdl2_num_outputs;
 static struct sdl2_console *sdl2_console;
@@ -535,6 +536,10 @@ static void handle_mousewheel(SDL_Event *ev)
         btn = INPUT_BUTTON_WHEEL_UP;
     } else if (wev->y < 0) {
         btn = INPUT_BUTTON_WHEEL_DOWN;
+    } else if (wev->x < 0) {
+        btn = INPUT_BUTTON_WHEEL_RIGHT;
+    } else if (wev->x > 0) {
+        btn = INPUT_BUTTON_WHEEL_LEFT;
     } else {
         return;
     }
@@ -561,7 +566,7 @@ static void handle_windowevent(SDL_Event *ev)
             memset(&info, 0, sizeof(info));
             info.width = ev->window.data1;
             info.height = ev->window.data2;
-            dpy_set_ui_info(scon->dcl.con, &info);
+            dpy_set_ui_info(scon->dcl.con, &info, true);
         }
         sdl2_redraw(scon);
         break;
@@ -769,15 +774,6 @@ static const DisplayChangeListenerOps dcl_2d_ops = {
 };
 
 #if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
-static const DisplayGLOps dg_gl_ops = {
-    .dpy_gl_ctx_create          = sdl2_gl_create_context,
-    .dpy_gl_ctx_destroy         = sdl2_gl_destroy_context,
-    .dpy_gl_ctx_make_current    = sdl2_gl_make_context_current,
-    .dpy_gl_scanout_get_enabled = sdl2_gl_scanout_get_enabled,
-    .dpy_gl_scanout_disable     = sdl2_gl_scanout_disable,
-    .dpy_gl_scanout_texture     = sdl2_gl_scanout_texture,
-};
-
 static const DisplayChangeListenerOps dcl_gl_ops = {
     .dpy_name                = "sdl2-gl",
     .dpy_gfx_update          = sdl2_gl_update,
@@ -787,7 +783,23 @@ static const DisplayChangeListenerOps dcl_gl_ops = {
     .dpy_mouse_set           = sdl_mouse_warp,
     .dpy_cursor_define       = sdl_mouse_define,
 
+    .dpy_gl_scanout_disable  = sdl2_gl_scanout_disable,
+    .dpy_gl_scanout_texture  = sdl2_gl_scanout_texture,
     .dpy_gl_update           = sdl2_gl_scanout_flush,
+};
+
+static bool
+sdl2_gl_is_compatible_dcl(DisplayGLCtx *dgc,
+                          DisplayChangeListener *dcl)
+{
+    return dcl->ops == &dcl_gl_ops;
+}
+
+static const DisplayGLCtxOps gl_ctx_ops = {
+    .dpy_gl_ctx_is_compatible_dcl = sdl2_gl_is_compatible_dcl,
+    .dpy_gl_ctx_create       = sdl2_gl_create_context,
+    .dpy_gl_ctx_destroy      = sdl2_gl_destroy_context,
+    .dpy_gl_ctx_make_current = sdl2_gl_make_context_current,
 };
 #endif
 
@@ -841,12 +853,6 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
 
     gui_fullscreen = o->has_full_screen && o->full_screen;
 
-#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
-    if (display_opengl) {
-        register_displayglops(&dg_gl_ops);
-    }
-#endif
-
     for (i = 0;; i++) {
         QemuConsole *con = qemu_console_lookup_by_index(i);
         if (!con) {
@@ -870,13 +876,16 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
 #if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
         sdl2_console[i].opengl = display_opengl;
         sdl2_console[i].dcl.ops = display_opengl ? &dcl_gl_ops : &dcl_2d_ops;
+        sdl2_console[i].dgc.ops = display_opengl ? &gl_ctx_ops : NULL;
 #else
         sdl2_console[i].opengl = 0;
         sdl2_console[i].dcl.ops = &dcl_2d_ops;
 #endif
         sdl2_console[i].dcl.con = con;
         sdl2_console[i].kbd = qkbd_state_init(con);
-        console_set_displayglcontext(con, sdl2_console + i);
+        if (display_opengl) {
+            qemu_console_set_display_gl_ctx(con, &sdl2_console[i].dgc);
+        }
         register_displaychangelistener(&sdl2_console[i].dcl);
 
 #if defined(SDL_VIDEO_DRIVER_WINDOWS) || defined(SDL_VIDEO_DRIVER_X11)

@@ -53,19 +53,6 @@
 #define NSControlStateValueOff NSOffState
 #endif
 
-// Utility function to run specified code block with iothread lock held
-static void with_iothread_lock(CodeBlock block)
-{
-    bool locked = qemu_mutex_iothread_locked();
-    if (!locked) {
-        qemu_mutex_lock_iothread();
-    }
-    block();
-    if (!locked) {
-        qemu_mutex_unlock_iothread();
-    }
-}
-
 /* Displays an alert dialog box with the specified message */
 static void QEMU_Alert(NSString *message)
 {
@@ -85,208 +72,13 @@ static void handleAnyDeviceErrors(Error * err)
     }
 }
 
-static void create_initial_menus(void)
-{
-    // Add menus
-    NSMenu      *menu;
-    NSMenuItem  *menuItem;
-
-    [NSApp setMainMenu:[[NSMenu alloc] init]];
-
-    // Application menu
-    menu = [[NSMenu alloc] initWithTitle:@""];
-    [menu addItemWithTitle:@"About QEMU" action:@selector(do_about_menu_item:) keyEquivalent:@""]; // About QEMU
-    [menu addItem:[NSMenuItem separatorItem]]; //Separator
-    [menu addItemWithTitle:@"Hide QEMU" action:@selector(hide:) keyEquivalent:@"h"]; //Hide QEMU
-    menuItem = (NSMenuItem *)[menu addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"]; // Hide Others
-    [menuItem setKeyEquivalentModifierMask:(NSEventModifierFlagOption|NSEventModifierFlagCommand)];
-    [menu addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""]; // Show All
-    [menu addItem:[NSMenuItem separatorItem]]; //Separator
-    [menu addItemWithTitle:@"Quit QEMU" action:@selector(terminate:) keyEquivalent:@"q"];
-    menuItem = [[NSMenuItem alloc] initWithTitle:@"Apple" action:nil keyEquivalent:@""];
-    [menuItem setSubmenu:menu];
-    [[NSApp mainMenu] addItem:menuItem];
-    [NSApp performSelector:@selector(setAppleMenu:) withObject:menu]; // Workaround (this method is private since 10.4+)
-
-    // Machine menu
-    menu = [[NSMenu alloc] initWithTitle: @"Machine"];
-    [menu setAutoenablesItems: NO];
-    [menu addItem: [[[NSMenuItem alloc] initWithTitle: @"Pause" action: @selector(pauseQEMU:) keyEquivalent: @""] autorelease]];
-    menuItem = [[[NSMenuItem alloc] initWithTitle: @"Resume" action: @selector(resumeQEMU:) keyEquivalent: @""] autorelease];
-    [menu addItem: menuItem];
-    [menuItem setEnabled: NO];
-    [menu addItem: [NSMenuItem separatorItem]];
-    [menu addItem: [[[NSMenuItem alloc] initWithTitle: @"Reset" action: @selector(restartQEMU:) keyEquivalent: @""] autorelease]];
-    [menu addItem: [[[NSMenuItem alloc] initWithTitle: @"Power Down" action: @selector(powerDownQEMU:) keyEquivalent: @""] autorelease]];
-    menuItem = [[[NSMenuItem alloc] initWithTitle: @"Machine" action:nil keyEquivalent:@""] autorelease];
-    [menuItem setSubmenu:menu];
-    [[NSApp mainMenu] addItem:menuItem];
-
-    // View menu
-    menu = [[NSMenu alloc] initWithTitle:@"View"];
-    [menu addItem: [[[NSMenuItem alloc] initWithTitle:@"Enter Fullscreen" action:@selector(doToggleFullScreen:) keyEquivalent:@"f"] autorelease]]; // Fullscreen
-    [menu addItem: [[[NSMenuItem alloc] initWithTitle:@"Zoom To Fit" action:@selector(zoomToFit:) keyEquivalent:@""] autorelease]];
-    menuItem = [[[NSMenuItem alloc] initWithTitle:@"View" action:nil keyEquivalent:@""] autorelease];
-    [menuItem setSubmenu:menu];
-    [[NSApp mainMenu] addItem:menuItem];
-
-    // Speed menu
-    menu = [[NSMenu alloc] initWithTitle:@"Speed"];
-
-    // Add the rest of the Speed menu items
-    int p, percentage, throttle_pct;
-    for (p = 10; p >= 0; p--)
-    {
-        percentage = p * 10 > 1 ? p * 10 : 1; // prevent a 0% menu item
-
-        menuItem = [[[NSMenuItem alloc]
-                   initWithTitle: [NSString stringWithFormat: @"%d%%", percentage] action:@selector(adjustSpeed:) keyEquivalent:@""] autorelease];
-
-        if (percentage == 100) {
-            [menuItem setState: NSControlStateValueOn];
-        }
-
-        /* Calculate the throttle percentage */
-        throttle_pct = -1 * percentage + 100;
-
-        [menuItem setTag: throttle_pct];
-        [menu addItem: menuItem];
-    }
-    menuItem = [[[NSMenuItem alloc] initWithTitle:@"Speed" action:nil keyEquivalent:@""] autorelease];
-    [menuItem setSubmenu:menu];
-    [[NSApp mainMenu] addItem:menuItem];
-
-    // Window menu
-    menu = [[NSMenu alloc] initWithTitle:@"Window"];
-    [menu addItem: [[[NSMenuItem alloc] initWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"] autorelease]]; // Miniaturize
-    menuItem = [[[NSMenuItem alloc] initWithTitle:@"Window" action:nil keyEquivalent:@""] autorelease];
-    [menuItem setSubmenu:menu];
-    [[NSApp mainMenu] addItem:menuItem];
-    [NSApp setWindowsMenu:menu];
-
-    // Help menu
-    menu = [[NSMenu alloc] initWithTitle:@"Help"];
-    [menu addItem: [[[NSMenuItem alloc] initWithTitle:@"QEMU Documentation" action:@selector(showQEMUDoc:) keyEquivalent:@"?"] autorelease]]; // QEMU Help
-    menuItem = [[[NSMenuItem alloc] initWithTitle:@"Window" action:nil keyEquivalent:@""] autorelease];
-    [menuItem setSubmenu:menu];
-    [[NSApp mainMenu] addItem:menuItem];
-}
-
-/* Returns a name for a given console */
-static NSString * getConsoleName(QemuConsole * console)
-{
-    return [NSString stringWithFormat: @"%s", qemu_console_get_label(console)];
-}
-
-/* Add an entry to the View menu for each console */
-static void add_console_menu_entries(void)
-{
-    NSMenu *menu;
-    NSMenuItem *menuItem;
-    int index = 0;
-
-    menu = [[[NSApp mainMenu] itemWithTitle:@"View"] submenu];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    while (qemu_console_lookup_by_index(index) != NULL) {
-        menuItem = [[[NSMenuItem alloc] initWithTitle: getConsoleName(qemu_console_lookup_by_index(index))
-                                               action: @selector(displayConsole:) keyEquivalent: @""] autorelease];
-        [menuItem setTag: index];
-        [menu addItem: menuItem];
-        index++;
-    }
-}
-
-/* Make menu items for all removable devices.
- * Each device is given an 'Eject' and 'Change' menu item.
- */
-static void addRemovableDevicesMenuItems(void)
-{
-    NSMenu *menu;
-    NSMenuItem *menuItem;
-    BlockInfoList *currentDevice, *pointerToFree;
-    NSString *deviceName;
-
-    currentDevice = qmp_query_block(NULL);
-    pointerToFree = currentDevice;
-    if(currentDevice == NULL) {
-        NSBeep();
-        QEMU_Alert(@"Failed to query for block devices!");
-        return;
-    }
-
-    menu = [[[NSApp mainMenu] itemWithTitle:@"Machine"] submenu];
-
-    // Add a separator between related groups of menu items
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // Set the attributes to the "Removable Media" menu item
-    NSString *titleString = @"Removable Media";
-    NSMutableAttributedString *attString=[[NSMutableAttributedString alloc] initWithString:titleString];
-    NSColor *newColor = [NSColor blackColor];
-    NSFontManager *fontManager = [NSFontManager sharedFontManager];
-    NSFont *font = [fontManager fontWithFamily:@"Helvetica"
-                                          traits:NSBoldFontMask|NSItalicFontMask
-                                          weight:0
-                                            size:14];
-    [attString addAttribute:NSFontAttributeName value:font range:NSMakeRange(0, [titleString length])];
-    [attString addAttribute:NSForegroundColorAttributeName value:newColor range:NSMakeRange(0, [titleString length])];
-    [attString addAttribute:NSUnderlineStyleAttributeName value:[NSNumber numberWithInt: 1] range:NSMakeRange(0, [titleString length])];
-
-    // Add the "Removable Media" menu item
-    menuItem = [NSMenuItem new];
-    [menuItem setAttributedTitle: attString];
-    [menuItem setEnabled: NO];
-    [menu addItem: menuItem];
-
-    /* Loop through all the block devices in the emulator */
-    while (currentDevice) {
-        deviceName = [[NSString stringWithFormat: @"%s", currentDevice->value->device] retain];
-
-        if(currentDevice->value->removable) {
-            menuItem = [[NSMenuItem alloc] initWithTitle: [NSString stringWithFormat: @"Change %s...", currentDevice->value->device]
-                                                  action: @selector(changeDeviceMedia:)
-                                           keyEquivalent: @""];
-            [menu addItem: menuItem];
-            [menuItem setRepresentedObject: deviceName];
-            [menuItem autorelease];
-
-            menuItem = [[NSMenuItem alloc] initWithTitle: [NSString stringWithFormat: @"Eject %s", currentDevice->value->device]
-                                                  action: @selector(ejectDeviceMedia:)
-                                           keyEquivalent: @""];
-            [menu addItem: menuItem];
-            [menuItem setRepresentedObject: deviceName];
-            [menuItem autorelease];
-        }
-        currentDevice = currentDevice->next;
-    }
-    qapi_free_BlockInfoList(pointerToFree);
-}
-
 @implementation QemuCocoaAppController
-- (id) initWithStartedSem:(QemuSemaphore *)given_started_sem
-                   screen:(QEMUScreen *)screen
+- (id) initWithScreen:(QEMUScreen *)screen
 {
     COCOA_DEBUG("%s\n", __func__);
 
     self = [super init];
     if (self) {
-
-        started_sem = given_started_sem;
-
-        create_initial_menus();
-
-        /*
-         * Create the menu entries which depend on QEMU state (for consoles
-         * and removeable devices). These make calls back into QEMU functions,
-         * which is OK because at this point we know that the second thread
-         * holds the iothread lock and is synchronously waiting for us to
-         * finish.
-         */
-        add_console_menu_entries();
-        addRemovableDevicesMenuItems();
-
         // create a view and add it to the window
         cocoaView = [[QemuCocoaView alloc] initWithFrame:NSMakeRect(0.0, 0.0, 640.0, 480.0)
                                                   screen:screen];
@@ -311,11 +103,6 @@ static void addRemovableDevicesMenuItems(void)
         [normalWindow center];
         [normalWindow setDelegate: self];
         [normalWindow release];
-
-        // set the supported image file types that can be opened
-        supportedImageFileTypes = [NSArray arrayWithObjects: @"img", @"iso", @"dmg",
-                                 @"qcow", @"qcow2", @"cloop", @"vmdk", @"cdr",
-                                  @"toast", nil];
     }
     return self;
 }
@@ -327,13 +114,6 @@ static void addRemovableDevicesMenuItems(void)
     if (cocoaView)
         [cocoaView release];
     [super dealloc];
-}
-
-- (void)applicationDidFinishLaunching: (NSNotification *) note
-{
-    COCOA_DEBUG("QemuCocoaAppController: applicationDidFinishLaunching\n");
-    /* Tell cocoa_display_init to proceed */
-    qemu_sem_post(started_sem);
 }
 
 - (void)applicationWillTerminate:(NSNotification *)aNotification
@@ -428,6 +208,13 @@ static void addRemovableDevicesMenuItems(void)
            NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar;
 }
 
+/* Called when QEMU goes into the background */
+- (void) applicationWillResignActive: (NSNotification *)aNotification
+{
+    COCOA_DEBUG("QemuCocoaAppController: applicationWillResignActive\n");
+    [cocoaView ungrabMouse];
+}
+
 /* We abstract the method called by the Enter Fullscreen menu item
  * because Mac OS 10.7 and higher disables it. This is because of the
  * menu item's old selector's name toggleFullScreen:
@@ -487,17 +274,17 @@ static void addRemovableDevicesMenuItems(void)
 /* Displays the console on the screen */
 - (void)displayConsole:(id)sender
 {
-    with_iothread_lock(^{
-        console_select([sender tag]);
-    });
+    qemu_mutex_lock_iothread();
+    [cocoaView selectConsoleLocked:[sender tag]];
+    qemu_mutex_unlock_iothread();
 }
 
 /* Pause the guest */
 - (void)pauseQEMU:(id)sender
 {
-    with_iothread_lock(^{
-        qmp_stop(NULL);
-    });
+    qemu_mutex_lock_iothread();
+    qmp_stop(NULL);
+    qemu_mutex_unlock_iothread();
     [sender setEnabled: NO];
     [[[sender menu] itemWithTitle: @"Resume"] setEnabled: YES];
     [cocoaView displayPause];
@@ -506,9 +293,9 @@ static void addRemovableDevicesMenuItems(void)
 /* Resume running the guest operating system */
 - (void)resumeQEMU:(id) sender
 {
-    with_iothread_lock(^{
-        qmp_cont(NULL);
-    });
+    qemu_mutex_lock_iothread();
+    qmp_cont(NULL);
+    qemu_mutex_unlock_iothread();
     [sender setEnabled: NO];
     [[[sender menu] itemWithTitle: @"Pause"] setEnabled: YES];
     [cocoaView removePause];
@@ -517,17 +304,17 @@ static void addRemovableDevicesMenuItems(void)
 /* Restarts QEMU */
 - (void)restartQEMU:(id)sender
 {
-    with_iothread_lock(^{
-        qmp_system_reset(NULL);
-    });
+    qemu_mutex_lock_iothread();
+    qmp_system_reset(NULL);
+    qemu_mutex_unlock_iothread();
 }
 
 /* Powers down QEMU */
 - (void)powerDownQEMU:(id)sender
 {
-    with_iothread_lock(^{
-        qmp_system_powerdown(NULL);
-    });
+    qemu_mutex_lock_iothread();
+    qmp_system_powerdown(NULL);
+    qemu_mutex_unlock_iothread();
 }
 
 /* Ejects the media.
@@ -543,11 +330,11 @@ static void addRemovableDevicesMenuItems(void)
         return;
     }
 
-    __block Error *err = NULL;
-    with_iothread_lock(^{
-        qmp_eject(true, [drive cStringUsingEncoding: NSASCIIStringEncoding],
-                  false, NULL, false, false, &err);
-    });
+    Error *err = NULL;
+    qemu_mutex_lock_iothread();
+    qmp_eject(true, [drive cStringUsingEncoding: NSASCIIStringEncoding],
+              false, NULL, false, false, &err);
+    qemu_mutex_unlock_iothread();
     handleAnyDeviceErrors(err);
 }
 
@@ -570,7 +357,6 @@ static void addRemovableDevicesMenuItems(void)
     openPanel = [NSOpenPanel openPanel];
     [openPanel setCanChooseFiles: YES];
     [openPanel setAllowsMultipleSelection: NO];
-    [openPanel setAllowedFileTypes: supportedImageFileTypes];
     if([openPanel runModal] == NSModalResponseOK) {
         NSString * file = [[[openPanel URLs] objectAtIndex: 0] path];
         if(file == nil) {
@@ -579,18 +365,16 @@ static void addRemovableDevicesMenuItems(void)
             return;
         }
 
-        __block Error *err = NULL;
-        with_iothread_lock(^{
-            qmp_blockdev_change_medium(true,
-                                       [drive cStringUsingEncoding:
-                                                  NSASCIIStringEncoding],
-                                       false, NULL,
-                                       [file cStringUsingEncoding:
-                                                 NSASCIIStringEncoding],
-                                       true, "raw",
-                                       false, 0,
-                                       &err);
-        });
+        Error *err = NULL;
+        qemu_mutex_lock_iothread();
+        qmp_blockdev_change_medium(true,
+                                   [drive cStringUsingEncoding:NSASCIIStringEncoding],
+                                   false, NULL,
+                                   [file cStringUsingEncoding:NSASCIIStringEncoding],
+                                   true, "raw",
+                                   false, 0,
+                                   &err);
+        qemu_mutex_unlock_iothread();
         handleAnyDeviceErrors(err);
     }
 }
@@ -613,7 +397,7 @@ static void addRemovableDevicesMenuItems(void)
 /* The action method for the About menu item */
 - (IBAction) do_about_menu_item: (id) sender
 {
-    NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     char *icon_path_c = get_relocated_path(CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/qemu.png");
     NSString *icon_path = [NSString stringWithUTF8String:icon_path_c];
     g_free(icon_path_c);
@@ -662,9 +446,9 @@ static void addRemovableDevicesMenuItems(void)
     // get the throttle percentage
     throttle_pct = [sender tag];
 
-    with_iothread_lock(^{
-        cpu_throttle_set(throttle_pct);
-    });
+    qemu_mutex_lock_iothread();
+    cpu_throttle_set(throttle_pct);
+    qemu_mutex_unlock_iothread();
     COCOA_DEBUG("cpu throttling at %d%c\n", cpu_throttle_get_percentage(), '%');
 }
 

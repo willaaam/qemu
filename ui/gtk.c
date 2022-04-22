@@ -563,9 +563,9 @@ static const DisplayChangeListenerOps dcl_ops = {
 
 #if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
 
-static bool gd_has_dmabuf(void *dg)
+static bool gd_has_dmabuf(DisplayChangeListener *dcl)
 {
-    VirtualConsole *vc = dg;
+    VirtualConsole *vc = container_of(dcl, VirtualConsole, gfx.dcl);
 
     if (gtk_use_gl_area && !gtk_widget_get_realized(vc->gfx.drawing_area)) {
         /* FIXME: Assume it will work, actual check done after realize */
@@ -576,7 +576,8 @@ static bool gd_has_dmabuf(void *dg)
     return vc->gfx.has_dmabuf;
 }
 
-static void gd_gl_release_dmabuf(void *dg, QemuDmaBuf *dmabuf)
+static void gd_gl_release_dmabuf(DisplayChangeListener *dcl,
+                                 QemuDmaBuf *dmabuf)
 {
 #ifdef CONFIG_GBM
     egl_dmabuf_release_texture(dmabuf);
@@ -592,22 +593,9 @@ void gd_hw_gl_flushed(void *vcon)
     close(dmabuf->fence_fd);
     dmabuf->fence_fd = -1;
     graphic_hw_gl_block(vc->gfx.dcl.con, false);
-    graphic_hw_gl_flushed(vc->gfx.dcl.con);
 }
 
 /** DisplayState Callbacks (opengl version) **/
-
-static const DisplayGLOps dg_gl_area_ops = {
-    .dpy_gl_ctx_create          = gd_gl_area_create_context,
-    .dpy_gl_ctx_destroy         = gd_gl_area_destroy_context,
-    .dpy_gl_ctx_make_current    = gd_gl_area_make_current,
-    .dpy_gl_scanout_get_enabled = gd_gl_area_scanout_get_enabled,
-    .dpy_gl_scanout_texture     = gd_gl_area_scanout_texture,
-    .dpy_gl_scanout_disable     = gd_gl_area_scanout_disable,
-    .dpy_gl_scanout_dmabuf      = gd_gl_area_scanout_dmabuf,
-    .dpy_gl_release_dmabuf      = gd_gl_release_dmabuf,
-    .dpy_has_dmabuf             = gd_has_dmabuf,
-};
 
 static const DisplayChangeListenerOps dcl_gl_area_ops = {
     .dpy_name             = "gtk-egl",
@@ -618,11 +606,29 @@ static const DisplayChangeListenerOps dcl_gl_area_ops = {
     .dpy_mouse_set        = gd_mouse_set,
     .dpy_cursor_define    = gd_cursor_define,
 
-    .dpy_gl_update        = gd_gl_area_scanout_flush,
+    .dpy_gl_scanout_texture  = gd_gl_area_scanout_texture,
+    .dpy_gl_scanout_disable  = gd_gl_area_scanout_disable,
+    .dpy_gl_update           = gd_gl_area_scanout_flush,
+    .dpy_gl_scanout_dmabuf   = gd_gl_area_scanout_dmabuf,
+    .dpy_gl_release_dmabuf   = gd_gl_release_dmabuf,
+    .dpy_has_dmabuf          = gd_has_dmabuf,
+};
+
+static bool
+gd_gl_area_is_compatible_dcl(DisplayGLCtx *dgc,
+                             DisplayChangeListener *dcl)
+{
+    return dcl->ops == &dcl_gl_area_ops;
+}
+
+static const DisplayGLCtxOps gl_area_ctx_ops = {
+    .dpy_gl_ctx_is_compatible_dcl = gd_gl_area_is_compatible_dcl,
+    .dpy_gl_ctx_create       = gd_gl_area_create_context,
+    .dpy_gl_ctx_destroy      = gd_gl_area_destroy_context,
+    .dpy_gl_ctx_make_current = gd_gl_area_make_current,
 };
 
 #ifdef CONFIG_X11
-
 static const DisplayChangeListenerOps dcl_egl_ops = {
     .dpy_name             = "gtk-egl",
     .dpy_gfx_update       = gd_egl_update,
@@ -632,22 +638,29 @@ static const DisplayChangeListenerOps dcl_egl_ops = {
     .dpy_mouse_set        = gd_mouse_set,
     .dpy_cursor_define    = gd_cursor_define,
 
-    .dpy_gl_update        = gd_egl_flush,
-};
-
-static const DisplayGLOps dg_egl_ops = {
-    .dpy_gl_ctx_create       = gd_egl_create_context,
-    .dpy_gl_ctx_destroy      = qemu_egl_destroy_context,
-    .dpy_gl_ctx_make_current = gd_egl_make_current,
     .dpy_gl_scanout_disable  = gd_egl_scanout_disable,
     .dpy_gl_scanout_texture  = gd_egl_scanout_texture,
     .dpy_gl_scanout_dmabuf   = gd_egl_scanout_dmabuf,
     .dpy_gl_cursor_dmabuf    = gd_egl_cursor_dmabuf,
     .dpy_gl_cursor_position  = gd_egl_cursor_position,
+    .dpy_gl_update           = gd_egl_flush,
     .dpy_gl_release_dmabuf   = gd_gl_release_dmabuf,
     .dpy_has_dmabuf          = gd_has_dmabuf,
 };
 
+static bool
+gd_egl_is_compatible_dcl(DisplayGLCtx *dgc,
+                         DisplayChangeListener *dcl)
+{
+    return dcl->ops == &dcl_egl_ops;
+}
+
+static const DisplayGLCtxOps egl_ctx_ops = {
+    .dpy_gl_ctx_is_compatible_dcl = gd_egl_is_compatible_dcl,
+    .dpy_gl_ctx_create       = gd_egl_create_context,
+    .dpy_gl_ctx_destroy      = qemu_egl_destroy_context,
+    .dpy_gl_ctx_make_current = gd_egl_make_current,
+};
 #endif
 
 #endif /* defined(CONFIG_OPENGL) && defined(CONFIG_EGL) */
@@ -703,7 +716,7 @@ static void gd_set_ui_refresh_rate(VirtualConsole *vc, int refresh_rate)
 
     info = *dpy_get_ui_info(vc->gfx.dcl.con);
     info.refresh_rate = refresh_rate;
-    dpy_set_ui_info(vc->gfx.dcl.con, &info);
+    dpy_set_ui_info(vc->gfx.dcl.con, &info, true);
 }
 
 static void gd_set_ui_size(VirtualConsole *vc, gint width, gint height)
@@ -713,7 +726,7 @@ static void gd_set_ui_size(VirtualConsole *vc, gint width, gint height)
     info = *dpy_get_ui_info(vc->gfx.dcl.con);
     info.width = width;
     info.height = height;
-    dpy_set_ui_info(vc->gfx.dcl.con, &info);
+    dpy_set_ui_info(vc->gfx.dcl.con, &info, true);
 }
 
 #if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
@@ -976,33 +989,63 @@ static gboolean gd_scroll_event(GtkWidget *widget, GdkEventScroll *scroll,
                                 void *opaque)
 {
     VirtualConsole *vc = opaque;
-    InputButton btn;
+    InputButton btn_vertical;
+    InputButton btn_horizontal;
+    bool has_vertical = false;
+    bool has_horizontal = false;
 
     if (scroll->direction == GDK_SCROLL_UP) {
-        btn = INPUT_BUTTON_WHEEL_UP;
+        btn_vertical = INPUT_BUTTON_WHEEL_UP;
+        has_vertical = true;
     } else if (scroll->direction == GDK_SCROLL_DOWN) {
-        btn = INPUT_BUTTON_WHEEL_DOWN;
+        btn_vertical = INPUT_BUTTON_WHEEL_DOWN;
+        has_vertical = true;
+    } else if (scroll->direction == GDK_SCROLL_LEFT) {
+        btn_horizontal = INPUT_BUTTON_WHEEL_LEFT;
+        has_horizontal = true;
+    } else if (scroll->direction == GDK_SCROLL_RIGHT) {
+        btn_horizontal = INPUT_BUTTON_WHEEL_RIGHT;
+        has_horizontal = true;
     } else if (scroll->direction == GDK_SCROLL_SMOOTH) {
         gdouble delta_x, delta_y;
         if (!gdk_event_get_scroll_deltas((GdkEvent *)scroll,
                                          &delta_x, &delta_y)) {
             return TRUE;
         }
-        if (delta_y == 0) {
-            return TRUE;
-        } else if (delta_y > 0) {
-            btn = INPUT_BUTTON_WHEEL_DOWN;
+
+        if (delta_y > 0) {
+            btn_vertical = INPUT_BUTTON_WHEEL_DOWN;
+            has_vertical = true;
+        } else if (delta_y < 0) {
+            btn_vertical = INPUT_BUTTON_WHEEL_UP;
+            has_vertical = true;
+        } else if (delta_x > 0) {
+            btn_horizontal = INPUT_BUTTON_WHEEL_RIGHT;
+            has_horizontal = true;
+        } else if (delta_x < 0) {
+            btn_horizontal = INPUT_BUTTON_WHEEL_LEFT;
+            has_horizontal = true;
         } else {
-            btn = INPUT_BUTTON_WHEEL_UP;
+            return TRUE;
         }
     } else {
         return TRUE;
     }
 
-    qemu_input_queue_btn(vc->gfx.dcl.con, btn, true);
-    qemu_input_event_sync();
-    qemu_input_queue_btn(vc->gfx.dcl.con, btn, false);
-    qemu_input_event_sync();
+    if (has_vertical) {
+        qemu_input_queue_btn(vc->gfx.dcl.con, btn_vertical, true);
+        qemu_input_event_sync();
+        qemu_input_queue_btn(vc->gfx.dcl.con, btn_vertical, false);
+        qemu_input_event_sync();
+    }
+
+    if (has_horizontal) {
+        qemu_input_queue_btn(vc->gfx.dcl.con, btn_horizontal, true);
+        qemu_input_event_sync();
+        qemu_input_queue_btn(vc->gfx.dcl.con, btn_horizontal, false);
+        qemu_input_event_sync();
+    }
+
     return TRUE;
 }
 
@@ -1261,7 +1304,7 @@ static gboolean gd_tab_window_close(GtkWidget *widget, GdkEvent *event,
                                     vc->tab_item, vc->label);
     gtk_widget_destroy(vc->window);
     vc->window = NULL;
-#if defined(CONFIG_OPENGL)
+#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
     if (vc->gfx.esurface) {
         eglDestroySurface(qemu_egl_display, vc->gfx.esurface);
         vc->gfx.esurface = NULL;
@@ -1300,7 +1343,7 @@ static void gd_menu_untabify(GtkMenuItem *item, void *opaque)
     if (!vc->window) {
         gtk_widget_set_sensitive(vc->menu_item, false);
         vc->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-#if defined(CONFIG_OPENGL)
+#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
         if (vc->gfx.esurface) {
             eglDestroySurface(qemu_egl_display, vc->gfx.esurface);
             vc->gfx.esurface = NULL;
@@ -2048,6 +2091,7 @@ static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
             g_signal_connect(vc->gfx.drawing_area, "realize",
                              G_CALLBACK(gl_area_realize), vc);
             vc->gfx.dcl.ops = &dcl_gl_area_ops;
+            vc->gfx.dgc.ops = &gl_area_ctx_ops;
         } else {
 #ifdef CONFIG_X11
             vc->gfx.drawing_area = gtk_drawing_area_new();
@@ -2062,6 +2106,7 @@ static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
             gtk_widget_set_double_buffered(vc->gfx.drawing_area, FALSE);
 #pragma GCC diagnostic pop
             vc->gfx.dcl.ops = &dcl_egl_ops;
+            vc->gfx.dgc.ops = &egl_ctx_ops;
             vc->gfx.has_dmabuf = qemu_egl_has_dmabuf();
 #else
             abort();
@@ -2096,7 +2141,9 @@ static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
     vc->gfx.kbd = qkbd_state_init(con);
     vc->gfx.dcl.con = con;
 
-    console_set_displayglcontext(con, vc);
+    if (display_opengl) {
+        qemu_console_set_display_gl_ctx(con, &vc->gfx.dgc);
+    }
     register_displaychangelistener(&vc->gfx.dcl);
 
     gd_connect_vc_gfx_signals(vc);
@@ -2185,18 +2232,6 @@ static GtkWidget *gd_create_menu_view(GtkDisplayState *s)
 
     separator = gtk_separator_menu_item_new();
     gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), separator);
-
-#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
-    if (display_opengl) {
-        if (gtk_use_gl_area) {
-            register_displayglops(&dg_gl_area_ops);
-        } else {
-#ifdef CONFIG_X11
-            register_displayglops(&dg_egl_ops);
-#endif
-        }
-    }
-#endif
 
     /* gfx */
     for (vc = 0;; vc++) {

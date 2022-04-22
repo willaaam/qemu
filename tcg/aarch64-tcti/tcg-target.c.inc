@@ -61,12 +61,12 @@
         case MO_LESW: variable = gadget_qemu_ld_lesw_ ## suffix; break; \
         case MO_LEUL: variable = gadget_qemu_ld_leul_ ## suffix; break; \
         case MO_LESL: variable = gadget_qemu_ld_lesl_ ## suffix; break; \
-        case MO_LEQ:  variable = gadget_qemu_ld_leq_  ## suffix; break; \
+        case MO_LEUQ: variable = gadget_qemu_ld_leq_  ## suffix; break; \
         case MO_BEUW: variable = gadget_qemu_ld_beuw_ ## suffix; break; \
         case MO_BESW: variable = gadget_qemu_ld_besw_ ## suffix; break; \
         case MO_BEUL: variable = gadget_qemu_ld_beul_ ## suffix; break; \
         case MO_BESL: variable = gadget_qemu_ld_besl_ ## suffix; break; \
-        case MO_BEQ:  variable = gadget_qemu_ld_beq_  ## suffix; break; \
+        case MO_BEUQ: variable = gadget_qemu_ld_beq_  ## suffix; break; \
         default: \
             g_assert_not_reached(); \
     }
@@ -87,10 +87,10 @@
         case MO_UB:   variable = gadget_qemu_st_ub_   ## suffix; break; \
         case MO_LEUW: variable = gadget_qemu_st_leuw_ ## suffix; break; \
         case MO_LEUL: variable = gadget_qemu_st_leul_ ## suffix; break; \
-        case MO_LEQ:  variable = gadget_qemu_st_leq_  ## suffix; break; \
+        case MO_LEUQ: variable = gadget_qemu_st_leq_  ## suffix; break; \
         case MO_BEUW: variable = gadget_qemu_st_beuw_ ## suffix; break; \
         case MO_BEUL: variable = gadget_qemu_st_beul_ ## suffix; break; \
-        case MO_BEQ:  variable = gadget_qemu_st_beq_  ## suffix; break; \
+        case MO_BEUQ: variable = gadget_qemu_st_beq_  ## suffix; break; \
         default: \
             g_assert_not_reached(); \
     }
@@ -230,7 +230,7 @@ static const int tcg_target_reg_alloc_order[] = {
     */
 };
 
-#if MAX_OPC_PARAM_IARGS != 6
+#if MAX_OPC_PARAM_IARGS != 7
 # error Fix needed, number of supported input arguments changed!
 #endif
 

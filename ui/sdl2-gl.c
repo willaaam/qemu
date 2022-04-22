@@ -58,7 +58,6 @@ static void sdl2_gl_render_surface(struct sdl2_console *scon)
 
     surface_gl_render_texture(scon->gls, scon->surface);
     SDL_GL_SwapWindow(scon->real_window);
-    graphic_hw_gl_flushed(scon->dcl.con);
 }
 
 void sdl2_gl_update(DisplayChangeListener *dcl,
@@ -133,9 +132,10 @@ void sdl2_gl_redraw(struct sdl2_console *scon)
     }
 }
 
-QEMUGLContext sdl2_gl_create_context(void *dg, QEMUGLParams *params)
+QEMUGLContext sdl2_gl_create_context(DisplayGLCtx *dgc,
+                                     QEMUGLParams *params)
 {
-    struct sdl2_console *scon = dg;
+    struct sdl2_console *scon = container_of(dgc, struct sdl2_console, dgc);
     SDL_GLContext ctx;
 
     assert(scon->opengl);
@@ -167,16 +167,17 @@ QEMUGLContext sdl2_gl_create_context(void *dg, QEMUGLParams *params)
     return (QEMUGLContext)ctx;
 }
 
-void sdl2_gl_destroy_context(void *dg, QEMUGLContext ctx)
+void sdl2_gl_destroy_context(DisplayGLCtx *dgc, QEMUGLContext ctx)
 {
     SDL_GLContext sdlctx = (SDL_GLContext)ctx;
 
     SDL_GL_DeleteContext(sdlctx);
 }
 
-int sdl2_gl_make_context_current(void *dg, QEMUGLContext ctx)
+int sdl2_gl_make_context_current(DisplayGLCtx *dgc,
+                                 QEMUGLContext ctx)
 {
-    struct sdl2_console *scon = dg;
+    struct sdl2_console *scon = container_of(dgc, struct sdl2_console, dgc);
     SDL_GLContext sdlctx = (SDL_GLContext)ctx;
 
     assert(scon->opengl);
@@ -184,9 +185,9 @@ int sdl2_gl_make_context_current(void *dg, QEMUGLContext ctx)
     return SDL_GL_MakeCurrent(scon->real_window, sdlctx);
 }
 
-void sdl2_gl_scanout_disable(void *dg)
+void sdl2_gl_scanout_disable(DisplayChangeListener *dcl)
 {
-    struct sdl2_console *scon = dg;
+    struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
 
     assert(scon->opengl);
     scon->w = 0;
@@ -194,18 +195,13 @@ void sdl2_gl_scanout_disable(void *dg)
     sdl2_set_scanout_mode(scon, false);
 }
 
-bool sdl2_gl_scanout_get_enabled(void *dg)
-{
-    return ((struct sdl2_console *)dg)->scanout_mode;
-}
-
-void sdl2_gl_scanout_texture(void *dg,
+void sdl2_gl_scanout_texture(DisplayChangeListener *dcl,
                              uint32_t backing_id,
                              DisplayGLTextureBorrower backing_borrow,
                              uint32_t x, uint32_t y,
                              uint32_t w, uint32_t h)
 {
-    struct sdl2_console *scon = dg;
+    struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
     bool backing_y_0_top;
     uint32_t backing_width;
     uint32_t backing_height;
@@ -214,9 +210,6 @@ void sdl2_gl_scanout_texture(void *dg,
 
     GLuint backing_texture = backing_borrow(backing_id, &backing_y_0_top,
                                             &backing_width, &backing_height);
-    if (!backing_texture) {
-        return;
-    }
 
     scon->x = x;
     scon->y = y;
@@ -252,5 +245,4 @@ void sdl2_gl_scanout_flush(DisplayChangeListener *dcl,
     egl_fb_blit(&scon->win_fb, &scon->guest_fb, !scon->y0_top);
 
     SDL_GL_SwapWindow(scon->real_window);
-    graphic_hw_gl_flushed(dcl->con);
 }

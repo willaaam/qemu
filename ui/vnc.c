@@ -1354,11 +1354,11 @@ void vnc_disconnect_finish(VncState *vs)
         /* last client gone */
         vnc_update_server_surface(vs->vd);
     }
-    if (vs->cbpeer.update.notify) {
+    vnc_unlock_output(vs);
+
+    if (vs->cbpeer.notifier.notify) {
         qemu_clipboard_peer_unregister(&vs->cbpeer);
     }
-
-    vnc_unlock_output(vs);
 
     qemu_mutex_destroy(&vs->output_mutex);
     if (vs->bh != NULL) {
@@ -1882,16 +1882,22 @@ static void kbd_leds(void *opaque, int ledstate)
 static void do_key_event(VncState *vs, int down, int keycode, int sym)
 {
     QKeyCode qcode = qemu_input_key_number_to_qcode(keycode);
+    QemuConsole *con = vs->vd->dcl.con;
 
     /* QEMU console switch */
     switch (qcode) {
     case Q_KEY_CODE_1 ... Q_KEY_CODE_9: /* '1' to '9' keys */
-        if (vs->vd->dcl.con == NULL && down &&
+        if (down &&
             qkbd_state_modifier_get(vs->vd->kbd, QKBD_MOD_CTRL) &&
             qkbd_state_modifier_get(vs->vd->kbd, QKBD_MOD_ALT)) {
-            /* Reset the modifiers sent to the current console */
-            qkbd_state_lift_all_keys(vs->vd->kbd);
-            console_select(qcode - Q_KEY_CODE_1);
+            QemuConsole *con = qemu_console_lookup_by_index(qcode - Q_KEY_CODE_1);
+            if (con) {
+                /* Reset the modifiers sent to the current console */
+                qkbd_state_lift_all_keys(vs->vd->kbd);
+                unregister_displaychangelistener(&vs->vd->dcl);
+                vs->vd->dcl.con = con;
+                register_displaychangelistener(&vs->vd->dcl);
+            }
             return;
         }
     default:
@@ -1945,7 +1951,7 @@ static void do_key_event(VncState *vs, int down, int keycode, int sym)
     }
 
     qkbd_state_key_event(vs->vd->kbd, qcode, down);
-    if (!qemu_console_is_graphic(NULL)) {
+    if (!qemu_console_is_graphic(con)) {
         bool numlock = qkbd_state_modifier_get(vs->vd->kbd, QKBD_MOD_NUMLOCK);
         bool control = qkbd_state_modifier_get(vs->vd->kbd, QKBD_MOD_CTRL);
         /* QEMU console emulation */
@@ -1959,88 +1965,88 @@ static void do_key_event(VncState *vs, int down, int keycode, int sym)
             case 0xb8:                          /* Right ALT */
                 break;
             case 0xc8:
-                kbd_put_keysym(QEMU_KEY_UP);
+                kbd_put_keysym_console(con, QEMU_KEY_UP);
                 break;
             case 0xd0:
-                kbd_put_keysym(QEMU_KEY_DOWN);
+                kbd_put_keysym_console(con, QEMU_KEY_DOWN);
                 break;
             case 0xcb:
-                kbd_put_keysym(QEMU_KEY_LEFT);
+                kbd_put_keysym_console(con, QEMU_KEY_LEFT);
                 break;
             case 0xcd:
-                kbd_put_keysym(QEMU_KEY_RIGHT);
+                kbd_put_keysym_console(con, QEMU_KEY_RIGHT);
                 break;
             case 0xd3:
-                kbd_put_keysym(QEMU_KEY_DELETE);
+                kbd_put_keysym_console(con, QEMU_KEY_DELETE);
                 break;
             case 0xc7:
-                kbd_put_keysym(QEMU_KEY_HOME);
+                kbd_put_keysym_console(con, QEMU_KEY_HOME);
                 break;
             case 0xcf:
-                kbd_put_keysym(QEMU_KEY_END);
+                kbd_put_keysym_console(con, QEMU_KEY_END);
                 break;
             case 0xc9:
-                kbd_put_keysym(QEMU_KEY_PAGEUP);
+                kbd_put_keysym_console(con, QEMU_KEY_PAGEUP);
                 break;
             case 0xd1:
-                kbd_put_keysym(QEMU_KEY_PAGEDOWN);
+                kbd_put_keysym_console(con, QEMU_KEY_PAGEDOWN);
                 break;
 
             case 0x47:
-                kbd_put_keysym(numlock ? '7' : QEMU_KEY_HOME);
+                kbd_put_keysym_console(con, numlock ? '7' : QEMU_KEY_HOME);
                 break;
             case 0x48:
-                kbd_put_keysym(numlock ? '8' : QEMU_KEY_UP);
+                kbd_put_keysym_console(con, numlock ? '8' : QEMU_KEY_UP);
                 break;
             case 0x49:
-                kbd_put_keysym(numlock ? '9' : QEMU_KEY_PAGEUP);
+                kbd_put_keysym_console(con, numlock ? '9' : QEMU_KEY_PAGEUP);
                 break;
             case 0x4b:
-                kbd_put_keysym(numlock ? '4' : QEMU_KEY_LEFT);
+                kbd_put_keysym_console(con, numlock ? '4' : QEMU_KEY_LEFT);
                 break;
             case 0x4c:
-                kbd_put_keysym('5');
+                kbd_put_keysym_console(con, '5');
                 break;
             case 0x4d:
-                kbd_put_keysym(numlock ? '6' : QEMU_KEY_RIGHT);
+                kbd_put_keysym_console(con, numlock ? '6' : QEMU_KEY_RIGHT);
                 break;
             case 0x4f:
-                kbd_put_keysym(numlock ? '1' : QEMU_KEY_END);
+                kbd_put_keysym_console(con, numlock ? '1' : QEMU_KEY_END);
                 break;
             case 0x50:
-                kbd_put_keysym(numlock ? '2' : QEMU_KEY_DOWN);
+                kbd_put_keysym_console(con, numlock ? '2' : QEMU_KEY_DOWN);
                 break;
             case 0x51:
-                kbd_put_keysym(numlock ? '3' : QEMU_KEY_PAGEDOWN);
+                kbd_put_keysym_console(con, numlock ? '3' : QEMU_KEY_PAGEDOWN);
                 break;
             case 0x52:
-                kbd_put_keysym('0');
+                kbd_put_keysym_console(con, '0');
                 break;
             case 0x53:
-                kbd_put_keysym(numlock ? '.' : QEMU_KEY_DELETE);
+                kbd_put_keysym_console(con, numlock ? '.' : QEMU_KEY_DELETE);
                 break;
 
             case 0xb5:
-                kbd_put_keysym('/');
+                kbd_put_keysym_console(con, '/');
                 break;
             case 0x37:
-                kbd_put_keysym('*');
+                kbd_put_keysym_console(con, '*');
                 break;
             case 0x4a:
-                kbd_put_keysym('-');
+                kbd_put_keysym_console(con, '-');
                 break;
             case 0x4e:
-                kbd_put_keysym('+');
+                kbd_put_keysym_console(con, '+');
                 break;
             case 0x9c:
-                kbd_put_keysym('\n');
+                kbd_put_keysym_console(con, '\n');
                 break;
 
             default:
                 if (control) {
-                    kbd_put_keysym(sym & 0x1f);
+                    kbd_put_keysym_console(con, sym & 0x1f);
                 } else {
-                    kbd_put_keysym(sym);
+                    kbd_put_keysym_console(con, sym);
                 }
                 break;
             }
@@ -2058,7 +2064,7 @@ static void key_event(VncState *vs, int down, uint32_t sym)
     int keycode;
     int lsym = sym;
 
-    if (lsym >= 'A' && lsym <= 'Z' && qemu_console_is_graphic(NULL)) {
+    if (lsym >= 'A' && lsym <= 'Z' && qemu_console_is_graphic(vs->vd->dcl.con)) {
         lsym = lsym - 'A' + 'a';
     }
 
@@ -2596,7 +2602,7 @@ static int protocol_client_msg(VncState *vs, uint8_t *data, size_t len)
             memset(&info, 0, sizeof(info));
             info.width = w;
             info.height = h;
-            dpy_set_ui_info(vs->vd->dcl.con, &info);
+            dpy_set_ui_info(vs->vd->dcl.con, &info, false);
             vnc_desktop_resize_ext(vs, 4 /* Request forwarded */);
         } else {
             vnc_desktop_resize_ext(vs, 3 /* Invalid screen layout */);
@@ -4199,7 +4205,7 @@ void vnc_display_open(const char *id, Error **errp)
             goto fail;
         }
     } else {
-        con = NULL;
+        con = qemu_console_lookup_first_graphic_console();
     }
 
     if (con != vd->dcl.con) {

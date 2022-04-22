@@ -155,7 +155,7 @@ static GLuint virgl_borrow_texture_for_scanout(uint32_t id, bool *y_0_top,
     }
 
     if (y_0_top) {
-        *y_0_top = info.flags & 1 /* FIXME: Y_0_TOP */;
+        *y_0_top = info.flags & VIRTIO_GPU_RESOURCE_FLAG_Y_0_TOP;
     }
 
     if (width) {
@@ -625,6 +625,7 @@ int virtio_gpu_virgl_init(VirtIOGPU *g)
 
     ret = virgl_renderer_init(g, 0, &virtio_gpu_3d_cbs);
     if (ret != 0) {
+        error_report("virgl could not be initialized: %d", ret);
         return ret;
     }
 

@@ -72,16 +72,6 @@ static void virtio_ramfb_gl_block(void *opaque, bool block)
     }
 }
 
-static void virtio_ramfb_gl_flushed(void *opaque)
-{
-    VirtIORAMFBBase *vramfb = opaque;
-    VirtIOGPUBase *g = vramfb->vgpu;
-
-    if (g->hw_ops->gl_flushed) {
-        g->hw_ops->gl_flushed(g);
-    }
-}
-
 static const GraphicHwOps virtio_ramfb_ops = {
     .get_flags = virtio_ramfb_get_flags,
     .invalidate = virtio_ramfb_invalidate_display,
@@ -89,7 +79,6 @@ static const GraphicHwOps virtio_ramfb_ops = {
     .text_update = virtio_ramfb_text_update,
     .ui_info = virtio_ramfb_ui_info,
     .gl_block = virtio_ramfb_gl_block,
-    .gl_flushed = virtio_ramfb_gl_flushed,
 };
 
 static const VMStateDescription vmstate_virtio_ramfb = {
@@ -157,7 +146,7 @@ static void virtio_ramfb_base_class_init(ObjectClass *klass, void *data)
     pcidev_k->class_id = PCI_CLASS_DISPLAY_OTHER;
 }
 
-static TypeInfo virtio_ramfb_base_info = {
+static const TypeInfo virtio_ramfb_base_info = {
     .name          = TYPE_VIRTIO_RAMFB_BASE,
     .parent        = TYPE_VIRTIO_PCI,
     .instance_size = sizeof(VirtIORAMFBBase),

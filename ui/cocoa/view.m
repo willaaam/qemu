@@ -33,6 +33,34 @@
 
 #define cgrect(nsrect) (*(CGRect *)&(nsrect))
 
+// Utility functions to run specified code block with iothread lock held
+static void with_iothread_lock(CodeBlock block)
+{
+    bool locked = qemu_mutex_iothread_locked();
+    if (!locked) {
+        qemu_mutex_lock_iothread();
+    }
+    block();
+    if (!locked) {
+        qemu_mutex_unlock_iothread();
+    }
+}
+
+static bool bool_with_iothread_lock(BoolCodeBlock block)
+{
+    bool locked = qemu_mutex_iothread_locked();
+    bool val;
+
+    if (!locked) {
+        qemu_mutex_lock_iothread();
+    }
+    val = block();
+    if (!locked) {
+        qemu_mutex_unlock_iothread();
+    }
+    return val;
+}
+
 static int cocoa_keycode_to_qemu(int keycode)
 {
     if (qemu_input_map_osx_to_qcode_len <= keycode) {
@@ -58,8 +86,8 @@ static CGRect compute_cursor_clip_rect(int screen_height,
 
 static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEventRef cgEvent, void *userInfo)
 {
-    QemuCocoaView *cocoaView = (QemuCocoaView*) userInfo;
-    NSEvent* event = [NSEvent eventWithCGEvent:cgEvent];
+    QemuCocoaView *cocoaView = userInfo;
+    NSEvent *event = [NSEvent eventWithCGEvent:cgEvent];
     if ([cocoaView isMouseGrabbed] && [cocoaView handleEvent:event]) {
         COCOA_DEBUG("Global events tap: qemu handled the event, capturing!\n");
         return NULL;
@@ -81,7 +109,6 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
         screen = given_screen;
         screen_width = frameRect.size.width;
         screen_height = frameRect.size.height;
-        kbd = qkbd_state_init(screen->dcl.con);
 
         /* Used for displaying pause on the screen */
         pauseLabel = [NSTextField new];
@@ -106,8 +133,6 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     if (pauseLabel) {
         [pauseLabel release];
     }
-
-    qkbd_state_free(kbd);
 
     if (eventsTap) {
         CFRelease(eventsTap);
@@ -156,6 +181,12 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 - (void) viewWillMoveToWindow:(NSWindow *)newWindow
 {
     [self removeTrackingRect];
+}
+
+- (void) selectConsoleLocked:(unsigned int)index
+{
+    cocoa_listener_select(index);
+    [self updateUIInfo];
 }
 
 - (void) hideCursor
@@ -225,7 +256,6 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
             stride * h,
             NULL
         );
-
         CGImageRef imageRef = CGImageCreate(
             w, //width
             h, //height
@@ -263,16 +293,18 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
         CGImageRelease (imageRef);
         CGDataProviderRelease(dataProviderRef);
 
-        if (screen->mouse_on) {
+        if (screen->active_listener->mouse_on) {
             size_t cursor_width = CGImageGetWidth(screen->cursor_cgimage);
             size_t cursor_height = CGImageGetHeight(screen->cursor_cgimage);
-            clipRect = compute_cursor_clip_rect(h, screen->mouse_x, screen->mouse_y,
+            int mouse_x = screen->active_listener->mouse_x;
+            int mouse_y = screen->active_listener->mouse_y;
+            clipRect = compute_cursor_clip_rect(h, mouse_x, mouse_y,
                                                 cursor_width,
                                                 cursor_height);
             CGRect drawRect = [self convertCursorClipRectToDraw:clipRect
                                                    screenHeight:h
-                                                         mouseX:screen->mouse_x
-                                                         mouseY:screen->mouse_y];
+                                                         mouseX:mouse_x
+                                                         mouseY:mouse_y];
             clipImageRef = CGImageCreateWithImageInRect(
                                                         screen->cursor_cgimage,
                                                         clipRect
@@ -324,14 +356,11 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     }
 }
 
-- (void) updateUIInfo
+- (void) updateUIInfoLocked
 {
+    /* Must be called with the iothread lock, i.e. via updateUIInfo */
     NSSize frameSize;
     QemuUIInfo info = {};
-
-    if (!qatomic_load_acquire(&screen->inited)) {
-        return;
-    }
 
     if ([self window]) {
         NSDictionary *description = [[[self window] screen] deviceDescription];
@@ -350,7 +379,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
             CVTime period = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(displayLink);
             CVDisplayLinkRelease(displayLink);
             if (!(period.flags & kCVTimeIsIndefinite)) {
-                update_displaychangelistener(&screen->dcl,
+                update_displaychangelistener(&screen->active_listener->dcl,
                                              1000 * period.timeValue / period.timeScale);
                 info.refresh_rate = (int64_t)1000 * period.timeScale / period.timeValue;
             }
@@ -367,7 +396,26 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     info.width = frameBackingSize.width;
     info.height = frameBackingSize.height;
 
-    dpy_set_ui_info(screen->dcl.con, &info);
+    dpy_set_ui_info(screen->active_listener->dcl.con, &info, TRUE);
+}
+
+- (void) updateUIInfo
+{
+    if (!screen->listeners) {
+        /*
+         * Don't try to tell QEMU about UI information in the application
+         * startup phase -- we haven't yet registered dcl with the QEMU UI
+         * layer, and also trying to take the iothread lock would deadlock.
+         * When cocoa_display_init() does register the dcl, the UI layer
+         * will call cocoa_switch(), which will call updateUIInfo, so
+         * we don't lose any information here.
+         */
+        return;
+    }
+
+    with_iothread_lock(^{
+        [self updateUIInfoLocked];
+    });
 }
 
 - (void) updateScreenWidth:(int)w height:(int)h
@@ -413,7 +461,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 }
 
 - (void) toggleKey: (int)keycode {
-    qkbd_state_key_event(kbd, keycode, !qkbd_state_key_get(kbd, keycode));
+    qkbd_state_key_event(screen->kbd, keycode, !qkbd_state_key_get(screen->kbd, keycode));
 }
 
 // Does the work of sending input to the monitor
@@ -429,7 +477,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
     /* translates Macintosh keycodes to QEMU's keysym */
 
-    int without_control_translation[] = {
+    static const int without_control_translation[] = {
         [0 ... 0xff] = 0,   // invalid key
 
         [kVK_UpArrow]       = QEMU_KEY_UP,
@@ -444,7 +492,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
         [kVK_Delete]        = QEMU_KEY_BACKSPACE,
     };
 
-    int with_control_translation[] = {
+    static const int with_control_translation[] = {
         [0 ... 0xff] = 0,   // invalid key
 
         [kVK_UpArrow]       = QEMU_KEY_CTRL_UP,
@@ -476,33 +524,26 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     }
 
     if (keysym) {
-        kbd_put_keysym(keysym);
+        kbd_put_keysym_console(screen->active_listener->dcl.con, keysym);
     }
 }
 
 - (bool) handleEvent:(NSEvent *)event
 {
-    if(!qatomic_read(&screen->inited)) {
-        /*
-         * Just let OSX have all events that arrive before
-         * applicationDidFinishLaunching.
-         * This avoids a deadlock on the iothread lock, which cocoa_display_init()
-         * will not drop until after the app_started_sem is posted. (In theory
-         * there should not be any such events, but OSX Catalina now emits some.)
-         */
+    if(!screen->listeners) {
         return false;
     }
 
-    qemu_mutex_lock_iothread();
-    bool handled = [self handleEventLocked:event];
-    qemu_mutex_unlock_iothread();
-    return handled;
+    return bool_with_iothread_lock(^{
+        return [self handleEventLocked:event];
+    });
 }
 
 - (bool) handleEventLocked:(NSEvent *)event
 {
     /* Return true if we handled the event, false if it should be given to OSX */
     COCOA_DEBUG("QemuCocoaView: handleEvent\n");
+    int buttons = 0;
     int keycode = 0;
     NSUInteger modifiers = [event modifierFlags];
 
@@ -544,35 +585,35 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
      *   this implementation usable enough.
      */
     if (!!(modifiers & NSEventModifierFlagCapsLock) !=
-        qkbd_state_modifier_get(kbd, QKBD_MOD_CAPSLOCK)) {
-        qkbd_state_key_event(kbd, Q_KEY_CODE_CAPS_LOCK, true);
-        qkbd_state_key_event(kbd, Q_KEY_CODE_CAPS_LOCK, false);
+        qkbd_state_modifier_get(screen->kbd, QKBD_MOD_CAPSLOCK)) {
+        qkbd_state_key_event(screen->kbd, Q_KEY_CODE_CAPS_LOCK, true);
+        qkbd_state_key_event(screen->kbd, Q_KEY_CODE_CAPS_LOCK, false);
     }
 
     if (!(modifiers & NSEventModifierFlagShift)) {
-        qkbd_state_key_event(kbd, Q_KEY_CODE_SHIFT, false);
-        qkbd_state_key_event(kbd, Q_KEY_CODE_SHIFT_R, false);
+        qkbd_state_key_event(screen->kbd, Q_KEY_CODE_SHIFT, false);
+        qkbd_state_key_event(screen->kbd, Q_KEY_CODE_SHIFT_R, false);
     }
     if (!(modifiers & NSEventModifierFlagControl)) {
-        qkbd_state_key_event(kbd, Q_KEY_CODE_CTRL, false);
-        qkbd_state_key_event(kbd, Q_KEY_CODE_CTRL_R, false);
+        qkbd_state_key_event(screen->kbd, Q_KEY_CODE_CTRL, false);
+        qkbd_state_key_event(screen->kbd, Q_KEY_CODE_CTRL_R, false);
     }
     if (!(modifiers & NSEventModifierFlagOption)) {
-        if ([self isSwapOptionCommandEnabled]) {
-            qkbd_state_key_event(kbd, Q_KEY_CODE_META_L, false);
-            qkbd_state_key_event(kbd, Q_KEY_CODE_META_R, false);
+        if (screen->swap_opt_cmd) {
+            qkbd_state_key_event(screen->kbd, Q_KEY_CODE_META_L, false);
+            qkbd_state_key_event(screen->kbd, Q_KEY_CODE_META_R, false);
         } else {
-            qkbd_state_key_event(kbd, Q_KEY_CODE_ALT, false);
-            qkbd_state_key_event(kbd, Q_KEY_CODE_ALT_R, false);
+            qkbd_state_key_event(screen->kbd, Q_KEY_CODE_ALT, false);
+            qkbd_state_key_event(screen->kbd, Q_KEY_CODE_ALT_R, false);
         }
     }
     if (!(modifiers & NSEventModifierFlagCommand)) {
-        if ([self isSwapOptionCommandEnabled]) {
-            qkbd_state_key_event(kbd, Q_KEY_CODE_ALT, false);
-            qkbd_state_key_event(kbd, Q_KEY_CODE_ALT_R, false);
+        if (screen->swap_opt_cmd) {
+            qkbd_state_key_event(screen->kbd, Q_KEY_CODE_ALT, false);
+            qkbd_state_key_event(screen->kbd, Q_KEY_CODE_ALT_R, false);
         } else {
-            qkbd_state_key_event(kbd, Q_KEY_CODE_META_L, false);
-            qkbd_state_key_event(kbd, Q_KEY_CODE_META_R, false);
+            qkbd_state_key_event(screen->kbd, Q_KEY_CODE_META_L, false);
+            qkbd_state_key_event(screen->kbd, Q_KEY_CODE_META_R, false);
         }
     }
 
@@ -605,7 +646,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
                 case kVK_Option:
                     if (!!(modifiers & NSEventModifierFlagOption)) {
-                        if ([self isSwapOptionCommandEnabled]) {
+                        if (screen->swap_opt_cmd) {
                             [self toggleKey:Q_KEY_CODE_META_L];
                         } else {
                             [self toggleKey:Q_KEY_CODE_ALT];
@@ -615,7 +656,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
                 case kVK_RightOption:
                     if (!!(modifiers & NSEventModifierFlagOption)) {
-                        if ([self isSwapOptionCommandEnabled]) {
+                        if (screen->swap_opt_cmd) {
                             [self toggleKey:Q_KEY_CODE_META_R];
                         } else {
                             [self toggleKey:Q_KEY_CODE_ALT_R];
@@ -626,8 +667,9 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                 /* Don't pass command key changes to guest unless mouse is grabbed */
                 case kVK_Command:
                     if (isMouseGrabbed &&
-                        !!(modifiers & NSEventModifierFlagCommand)) {
-                        if ([self isSwapOptionCommandEnabled]) {
+                        !!(modifiers & NSEventModifierFlagCommand) &&
+                        !screen->left_command_key_disabled) {
+                        if (screen->swap_opt_cmd) {
                             [self toggleKey:Q_KEY_CODE_ALT];
                         } else {
                             [self toggleKey:Q_KEY_CODE_META_L];
@@ -638,7 +680,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                 case kVK_RightCommand:
                     if (isMouseGrabbed &&
                         !!(modifiers & NSEventModifierFlagCommand)) {
-                        if ([self isSwapOptionCommandEnabled]) {
+                        if (screen->swap_opt_cmd) {
                             [self toggleKey:Q_KEY_CODE_ALT_R];
                         } else {
                             [self toggleKey:Q_KEY_CODE_META_R];
@@ -668,7 +710,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
                         // enable graphic console
                         case '1' ... '9':
-                            console_select(key - '0' - 1); /* ascii math */
+                            [self selectConsoleLocked:key - '0' - 1]; /* ascii math */
                             return true;
 
                         // release the mouse grab
@@ -679,8 +721,8 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                 }
             }
 
-            if (qemu_console_is_graphic(NULL)) {
-                qkbd_state_key_event(kbd, keycode, true);
+            if (qemu_console_is_graphic(screen->active_listener->dcl.con)) {
+                qkbd_state_key_event(screen->kbd, keycode, true);
             } else {
                 [self handleMonitorInput: event];
             }
@@ -694,8 +736,8 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                 return true;
             }
 
-            if (qemu_console_is_graphic(NULL)) {
-                qkbd_state_key_event(kbd, keycode, false);
+            if (qemu_console_is_graphic(screen->active_listener->dcl.con)) {
+                qkbd_state_key_event(screen->kbd, keycode, false);
             }
             return true;
         case NSEventTypeScrollWheel:
@@ -705,21 +747,27 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
              */
 
             /*
-             * When deltaY is zero, it means that this scrolling event was
-             * either horizontal, or so fine that it only appears in
-             * scrollingDeltaY. So we drop the event.
+             * We shouldn't have got a scroll event when deltaY and delta Y
+             * are zero, hence no harm in dropping the event
              */
-            if ([event deltaY] != 0) {
+            if ([event deltaY] != 0 || [event deltaX] != 0) {
             /* Determine if this is a scroll up or scroll down event */
-                int buttons = ([event deltaY] > 0) ?
+                if ([event deltaY] != 0) {
+                  buttons = ([event deltaY] > 0) ?
                     INPUT_BUTTON_WHEEL_UP : INPUT_BUTTON_WHEEL_DOWN;
-                qemu_input_queue_btn(screen->dcl.con, buttons, true);
+                } else if ([event deltaX] != 0) {
+                  buttons = ([event deltaX] > 0) ?
+                    INPUT_BUTTON_WHEEL_LEFT : INPUT_BUTTON_WHEEL_RIGHT;
+                }
+
+                qemu_input_queue_btn(screen->active_listener->dcl.con, buttons, true);
                 qemu_input_event_sync();
-                qemu_input_queue_btn(screen->dcl.con, buttons, false);
+                qemu_input_queue_btn(screen->active_listener->dcl.con, buttons, false);
                 qemu_input_event_sync();
             }
+
             /*
-             * Since deltaY also reports scroll wheel events we prevent mouse
+             * Since deltaX/deltaY also report scroll wheel events we prevent mouse
              * movement code from executing.
              */
             return true;
@@ -734,23 +782,23 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
         return;
     }
 
-    qemu_mutex_lock_iothread();
+    with_iothread_lock(^{
+        QemuConsole *con = screen->active_listener->dcl.con;
 
-    if (isAbsoluteEnabled) {
-        CGFloat d = (CGFloat)screen_height / [self frame].size.height;
-        NSPoint p = [event locationInWindow];
-        // Note that the origin for Cocoa mouse coords is bottom left, not top left.
-        qemu_input_queue_abs(screen->dcl.con, INPUT_AXIS_X, p.x * d, 0, screen_width);
-        qemu_input_queue_abs(screen->dcl.con, INPUT_AXIS_Y, screen_height - p.y * d, 0, screen_height);
-    } else {
-        CGFloat d = (CGFloat)screen_height / [self convertSizeToBacking:[self frame].size].height;
-        qemu_input_queue_rel(screen->dcl.con, INPUT_AXIS_X, [event deltaX] * d);
-        qemu_input_queue_rel(screen->dcl.con, INPUT_AXIS_Y, [event deltaY] * d);
-    }
+        if (isAbsoluteEnabled) {
+            CGFloat d = (CGFloat)screen_height / [self frame].size.height;
+            NSPoint p = [event locationInWindow];
+            // Note that the origin for Cocoa mouse coords is bottom left, not top left.
+            qemu_input_queue_abs(con, INPUT_AXIS_X, p.x * d, 0, screen_width);
+            qemu_input_queue_abs(con, INPUT_AXIS_Y, screen_height - p.y * d, 0, screen_height);
+        } else {
+            CGFloat d = (CGFloat)screen_height / [self convertSizeToBacking:[self frame].size].height;
+            qemu_input_queue_rel(con, INPUT_AXIS_X, [event deltaX] * d);
+            qemu_input_queue_rel(con, INPUT_AXIS_Y, [event deltaY] * d);
+        }
 
-    qemu_input_event_sync();
-
-    qemu_mutex_unlock_iothread();
+        qemu_input_event_sync();
+    });
 }
 
 - (void) handleMouseEvent:(NSEvent *)event button:(InputButton)button down:(bool)down
@@ -759,9 +807,9 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
         return;
     }
 
-    qemu_mutex_lock_iothread();
-    qemu_input_queue_btn(screen->dcl.con, button, down);
-    qemu_mutex_unlock_iothread();
+    with_iothread_lock(^{
+        qemu_input_queue_btn(screen->active_listener->dcl.con, button, down);
+    });
 
     [self handleMouseEvent:event];
 }
@@ -838,6 +886,10 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 {
     COCOA_DEBUG("QemuCocoaView: grabMouse\n");
 
+    if (!screen->listeners) {
+        return;
+    }
+
     if (qemu_name)
         [[self window] setTitle:[NSString stringWithFormat:@"QEMU %s - (Press ctrl + alt + g to release Mouse)", qemu_name]];
     else
@@ -849,9 +901,9 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
 - (void) ungrabMouse
 {
-    qemu_mutex_lock_iothread();
-    [self ungrabMouseLocked];
-    qemu_mutex_unlock_iothread();
+    with_iothread_lock(^{
+        [self ungrabMouseLocked];
+    });
 }
 
 - (void) ungrabMouseLocked
@@ -876,13 +928,14 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 }
 - (BOOL) isMouseGrabbed {return isMouseGrabbed;}
 - (BOOL) isAbsoluteEnabled {return isAbsoluteEnabled;}
-- (BOOL) isSwapOptionCommandEnabled {return screen->swap_option_command;}
 
 - (void) raiseAllButtonsLocked
 {
-    qemu_input_queue_btn(screen->dcl.con, INPUT_BUTTON_LEFT, false);
-    qemu_input_queue_btn(screen->dcl.con, INPUT_BUTTON_RIGHT, false);
-    qemu_input_queue_btn(screen->dcl.con, INPUT_BUTTON_MIDDLE, false);
+    QemuConsole *con = screen->active_listener->dcl.con;
+
+    qemu_input_queue_btn(con, INPUT_BUTTON_LEFT, false);
+    qemu_input_queue_btn(con, INPUT_BUTTON_RIGHT, false);
+    qemu_input_queue_btn(con, INPUT_BUTTON_MIDDLE, false);
 }
 
 - (void) setNeedsDisplayForCursorX:(int)x

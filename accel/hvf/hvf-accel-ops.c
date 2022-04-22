@@ -462,11 +462,6 @@ static void hvf_start_vcpu_thread(CPUState *cpu)
                        cpu, QEMU_THREAD_JOINABLE);
 }
 
-__attribute__((weak)) void hvf_kick_vcpu_thread(CPUState *cpu)
-{
-    cpus_kick_thread(cpu);
-}
-
 static void hvf_accel_ops_class_init(ObjectClass *oc, void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);

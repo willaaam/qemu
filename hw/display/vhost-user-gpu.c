@@ -249,13 +249,13 @@ vhost_user_gpu_handle_display(VhostUserGPU *g, VhostUserGpuMsg *msg)
         }
 
         con = g->parent_obj.scanout[m->scanout_id].con;
-        if (!console_has_gl()) {
+        if (!console_has_gl(con)) {
             error_report("console doesn't support GL!");
             vhost_user_gpu_unblock(g);
             break;
         }
-        dpy_gl_update(con, m->x, m->y, m->width, m->height);
         g->backend_blocked = true;
+        dpy_gl_update(con, m->x, m->y, m->width, m->height);
         break;
     }
     case VHOST_USER_GPU_UPDATE: {

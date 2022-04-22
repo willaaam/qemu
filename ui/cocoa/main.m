@@ -22,6 +22,8 @@
  * THE SOFTWARE.
  */
 
+#define GL_SILENCE_DEPRECATION
+
 #include "qemu/osdep.h"
 
 #include <crt_externs.h>
@@ -30,6 +32,7 @@
 #include "ui/cocoa.h"
 #include "ui/input.h"
 #include "sysemu/sysemu.h"
+#include "qapi/qapi-commands-block.h"
 
 #ifdef CONFIG_EGL
 #include "ui/egl-context.h"
@@ -37,39 +40,76 @@
 
 static QEMUScreen screen;
 static QemuCocoaAppController *appController;
-
-static int gArgc;
-static char **gArgv;
-
-static QemuSemaphore display_init_sem;
-static QemuSemaphore app_started_sem;
+static bool have_cocoa_ui;
 
 static NSInteger cbchangecount = -1;
+static QemuClipboardPeer cbpeer;
 static QemuCocoaClipboard qemucb;
 static QemuCocoaPasteboardTypeOwner *cbowner;
 
 #ifdef CONFIG_OPENGL
 
-typedef struct {
-    uint32_t scanout_id;
-    DisplayGLTextureBorrower scanout_borrow;
-    bool surface_dirty;
-} DisplayGL;
-
-static DisplayGL *dgs;
-static QEMUGLContext view_ctx;
-static QemuGLShader *gls;
 static GLuint cursor_texture;
-static int cursor_texture_width;
-static int cursor_texture_height;
+static bool gl_dirty;
+static QEMUGLContext view_ctx;
 
 #ifdef CONFIG_EGL
 static EGLSurface egl_surface;
 #endif
 
-static void cocoa_gl_destroy_context(void *dg, QEMUGLContext ctx);
+static bool cocoa_gl_is_compatible_dcl(DisplayGLCtx *dgc,
+                                       DisplayChangeListener *dcl);
+
+static QEMUGLContext cocoa_gl_create_context(DisplayGLCtx *dgc,
+                                             QEMUGLParams *params);
+
+static void cocoa_gl_destroy_context(DisplayGLCtx *dgc, QEMUGLContext ctx);
+
+static int cocoa_gl_make_context_current(DisplayGLCtx *dgc, QEMUGLContext ctx);
+
+static const DisplayGLCtxOps dgc_ops = {
+    .dpy_gl_ctx_is_compatible_dcl = cocoa_gl_is_compatible_dcl,
+    .dpy_gl_ctx_create            = cocoa_gl_create_context,
+    .dpy_gl_ctx_destroy           = cocoa_gl_destroy_context,
+    .dpy_gl_ctx_make_current      = cocoa_gl_make_context_current,
+};
+
+static DisplayGLCtx dgc = {
+    .ops = &dgc_ops,
+};
 
 #endif
+
+/*
+ * The startup process for the OSX/Cocoa UI is complicated, because
+ * OSX insists that the UI runs on the initial main thread, and so we
+ * need to start a second thread which runs qemu_main_loop():
+ *
+ * Initial thread:                    2nd thread:
+ * in main():
+ *  qemu_init()
+ *  create main loop thread
+ *  enter OSX run loop                call qemu_main_loop()
+ */
+
+static void *call_qemu_main_loop(void *opaque)
+{
+    COCOA_DEBUG("Second thread: calling qemu_main_loop()\n");
+    qemu_mutex_lock_iothread();
+    qemu_main_loop();
+    COCOA_DEBUG("Second thread: qemu_main_loop() returned, exiting\n");
+    qemu_cleanup();
+    qkbd_state_free(screen.kbd);
+    [cbowner release];
+    CGImageRelease(screen.cursor_cgimage);
+#ifdef CONFIG_OPENGL
+    qemu_gl_fini_shader(dgc.gls);
+    if (view_ctx) {
+        cocoa_gl_destroy_context(&dgc, view_ctx);
+    }
+#endif
+    exit(0);
+}
 
 @interface QemuApplication : NSApplication
 @end
@@ -84,20 +124,220 @@ static void cocoa_gl_destroy_context(void *dg, QEMUGLContext ctx);
 }
 @end
 
+static void create_initial_menus(void)
+{
+    // Add menus
+    NSMenu      *menu;
+    NSMenuItem  *menuItem;
+
+    [NSApp setMainMenu:[[NSMenu alloc] init]];
+    [NSApp setServicesMenu:[[NSMenu alloc] initWithTitle:@"Services"]];
+
+    // Application menu
+    menu = [[NSMenu alloc] initWithTitle:@""];
+    [menu addItemWithTitle:@"About QEMU" action:@selector(do_about_menu_item:) keyEquivalent:@""]; // About QEMU
+    [menu addItem:[NSMenuItem separatorItem]]; //Separator
+    menuItem = [menu addItemWithTitle:@"Services" action:nil keyEquivalent:@""];
+    [menuItem setSubmenu:[NSApp servicesMenu]];
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItemWithTitle:@"Hide QEMU" action:@selector(hide:) keyEquivalent:@"h"]; //Hide QEMU
+    menuItem = (NSMenuItem *)[menu addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"]; // Hide Others
+    [menuItem setKeyEquivalentModifierMask:(NSEventModifierFlagOption|NSEventModifierFlagCommand)];
+    [menu addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""]; // Show All
+    [menu addItem:[NSMenuItem separatorItem]]; //Separator
+    [menu addItemWithTitle:@"Quit QEMU" action:@selector(terminate:) keyEquivalent:@"q"];
+    menuItem = [[NSMenuItem alloc] initWithTitle:@"Apple" action:nil keyEquivalent:@""];
+    [menuItem setSubmenu:menu];
+    [[NSApp mainMenu] addItem:menuItem];
+    [NSApp performSelector:@selector(setAppleMenu:) withObject:menu]; // Workaround (this method is private since 10.4+)
+
+    // Machine menu
+    menu = [[NSMenu alloc] initWithTitle: @"Machine"];
+    [menu setAutoenablesItems: NO];
+    [menu addItem: [[[NSMenuItem alloc] initWithTitle: @"Pause" action: @selector(pauseQEMU:) keyEquivalent: @""] autorelease]];
+    menuItem = [[[NSMenuItem alloc] initWithTitle: @"Resume" action: @selector(resumeQEMU:) keyEquivalent: @""] autorelease];
+    [menu addItem: menuItem];
+    [menuItem setEnabled: NO];
+    [menu addItem: [NSMenuItem separatorItem]];
+    [menu addItem: [[[NSMenuItem alloc] initWithTitle: @"Reset" action: @selector(restartQEMU:) keyEquivalent: @""] autorelease]];
+    [menu addItem: [[[NSMenuItem alloc] initWithTitle: @"Power Down" action: @selector(powerDownQEMU:) keyEquivalent: @""] autorelease]];
+    menuItem = [[[NSMenuItem alloc] initWithTitle: @"Machine" action:nil keyEquivalent:@""] autorelease];
+    [menuItem setSubmenu:menu];
+    [[NSApp mainMenu] addItem:menuItem];
+
+    // View menu
+    menu = [[NSMenu alloc] initWithTitle:@"View"];
+    [menu addItem: [[[NSMenuItem alloc] initWithTitle:@"Enter Fullscreen" action:@selector(doToggleFullScreen:) keyEquivalent:@"f"] autorelease]]; // Fullscreen
+    [menu addItem: [[[NSMenuItem alloc] initWithTitle:@"Zoom To Fit" action:@selector(zoomToFit:) keyEquivalent:@""] autorelease]];
+    menuItem = [[[NSMenuItem alloc] initWithTitle:@"View" action:nil keyEquivalent:@""] autorelease];
+    [menuItem setSubmenu:menu];
+    [[NSApp mainMenu] addItem:menuItem];
+
+    // Speed menu
+    menu = [[NSMenu alloc] initWithTitle:@"Speed"];
+
+    // Add the rest of the Speed menu items
+    int p, percentage, throttle_pct;
+    for (p = 10; p >= 0; p--)
+    {
+        percentage = p * 10 > 1 ? p * 10 : 1; // prevent a 0% menu item
+
+        menuItem = [[[NSMenuItem alloc]
+                   initWithTitle: [NSString stringWithFormat: @"%d%%", percentage] action:@selector(adjustSpeed:) keyEquivalent:@""] autorelease];
+
+        if (percentage == 100) {
+            [menuItem setState: NSControlStateValueOn];
+        }
+
+        /* Calculate the throttle percentage */
+        throttle_pct = -1 * percentage + 100;
+
+        [menuItem setTag: throttle_pct];
+        [menu addItem: menuItem];
+    }
+    menuItem = [[[NSMenuItem alloc] initWithTitle:@"Speed" action:nil keyEquivalent:@""] autorelease];
+    [menuItem setSubmenu:menu];
+    [[NSApp mainMenu] addItem:menuItem];
+
+    // Window menu
+    menu = [[NSMenu alloc] initWithTitle:@"Window"];
+    [menu addItem: [[[NSMenuItem alloc] initWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"] autorelease]]; // Miniaturize
+    menuItem = [[[NSMenuItem alloc] initWithTitle:@"Window" action:nil keyEquivalent:@""] autorelease];
+    [menuItem setSubmenu:menu];
+    [[NSApp mainMenu] addItem:menuItem];
+    [NSApp setWindowsMenu:menu];
+
+    // Help menu
+    menu = [[NSMenu alloc] initWithTitle:@"Help"];
+    [menu addItem: [[[NSMenuItem alloc] initWithTitle:@"QEMU Documentation" action:@selector(showQEMUDoc:) keyEquivalent:@"?"] autorelease]]; // QEMU Help
+    menuItem = [[[NSMenuItem alloc] initWithTitle:@"Window" action:nil keyEquivalent:@""] autorelease];
+    [menuItem setSubmenu:menu];
+    [[NSApp mainMenu] addItem:menuItem];
+}
+
+/* Returns a name for a given console */
+static NSString * getConsoleName(QemuConsole * console)
+{
+    g_autofree char *label = qemu_console_get_label(console);
+
+    return [NSString stringWithUTF8String:label];
+}
+
+/* Add an entry to the View menu for each console */
+static void add_console_menu_entries(void)
+{
+    NSMenu *menu;
+    NSMenuItem *menuItem;
+    size_t index;
+
+    menu = [[[NSApp mainMenu] itemWithTitle:@"View"] submenu];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    for (index = 0; index < screen.listeners_count; index++) {
+        menuItem = [[[NSMenuItem alloc] initWithTitle: getConsoleName(screen.listeners[index].dcl.con)
+                                               action: @selector(displayConsole:) keyEquivalent: @""] autorelease];
+        [menuItem setTag: index];
+        [menu addItem: menuItem];
+    }
+}
+
+/* Make menu items for all removable devices.
+ * Each device is given an 'Eject' and 'Change' menu item.
+ */
+static void addRemovableDevicesMenuItems(void)
+{
+    NSMenu *menu;
+    NSMenuItem *menuItem;
+    BlockInfoList *currentDevice, *pointerToFree;
+    NSString *deviceName;
+
+    currentDevice = qmp_query_block(NULL);
+    pointerToFree = currentDevice;
+
+    menu = [[[NSApp mainMenu] itemWithTitle:@"Machine"] submenu];
+
+    // Add a separator between related groups of menu items
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    // Set the attributes to the "Removable Media" menu item
+    NSString *titleString = @"Removable Media";
+    NSMutableAttributedString *attString=[[NSMutableAttributedString alloc] initWithString:titleString];
+    NSColor *newColor = [NSColor blackColor];
+    NSFontManager *fontManager = [NSFontManager sharedFontManager];
+    NSFont *font = [fontManager fontWithFamily:@"Helvetica"
+                                          traits:NSBoldFontMask|NSItalicFontMask
+                                          weight:0
+                                            size:14];
+    [attString addAttribute:NSFontAttributeName value:font range:NSMakeRange(0, [titleString length])];
+    [attString addAttribute:NSForegroundColorAttributeName value:newColor range:NSMakeRange(0, [titleString length])];
+    [attString addAttribute:NSUnderlineStyleAttributeName value:[NSNumber numberWithInt: 1] range:NSMakeRange(0, [titleString length])];
+
+    // Add the "Removable Media" menu item
+    menuItem = [NSMenuItem new];
+    [menuItem setAttributedTitle: attString];
+    [menuItem setEnabled: NO];
+    [menu addItem: menuItem];
+
+    /* Loop through all the block devices in the emulator */
+    while (currentDevice) {
+        deviceName = [[NSString stringWithFormat: @"%s", currentDevice->value->device] retain];
+
+        if(currentDevice->value->removable) {
+            menuItem = [[NSMenuItem alloc] initWithTitle: [NSString stringWithFormat: @"Change %s...", currentDevice->value->device]
+                                                  action: @selector(changeDeviceMedia:)
+                                           keyEquivalent: @""];
+            [menu addItem: menuItem];
+            [menuItem setRepresentedObject: deviceName];
+            [menuItem autorelease];
+
+            menuItem = [[NSMenuItem alloc] initWithTitle: [NSString stringWithFormat: @"Eject %s", currentDevice->value->device]
+                                                  action: @selector(ejectDeviceMedia:)
+                                           keyEquivalent: @""];
+            [menu addItem: menuItem];
+            [menuItem setRepresentedObject: deviceName];
+            [menuItem autorelease];
+        }
+        currentDevice = currentDevice->next;
+    }
+    qapi_free_BlockInfoList(pointerToFree);
+}
+
+static void cocoa_mouse_mode_change_notify(Notifier *notifier, void *data)
+{
+    static bool shared_is_absolute;
+
+    qatomic_set(&shared_is_absolute, qemu_input_is_absolute());
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        bool is_absolute = qatomic_read(&shared_is_absolute);
+        if (is_absolute == [[appController cocoaView] isAbsoluteEnabled]) {
+            return;
+        }
+
+        if (is_absolute && [[appController cocoaView] isMouseGrabbed]) {
+            [[appController cocoaView] ungrabMouse];
+        }
+        [[appController cocoaView] setAbsoluteEnabled:is_absolute];
+    });
+}
+
+static Notifier mouse_mode_change_notifier = {
+    .notify = cocoa_mouse_mode_change_notify
+};
+
 static void cocoa_clipboard_notify(Notifier *notifier, void *data);
 static void cocoa_clipboard_request(QemuClipboardInfo *info,
                                     QemuClipboardType type);
 
 static QemuClipboardPeer cbpeer = {
     .name = "cocoa",
-    .update = { .notify = cocoa_clipboard_notify },
+    .notifier = { .notify = cocoa_clipboard_notify },
     .request = cocoa_clipboard_request
 };
 
-static void cocoa_clipboard_notify(Notifier *notifier, void *data)
+static void cocoa_clipboard_update_info(QemuClipboardInfo *info)
 {
-    QemuClipboardInfo *info = data;
-
     if (info->owner == &cbpeer || info->selection != QEMU_CLIPBOARD_SELECTION_CLIPBOARD) {
         return;
     }
@@ -111,6 +351,20 @@ static void cocoa_clipboard_notify(Notifier *notifier, void *data)
     }
 
     qemu_event_set(&qemucb.event);
+}
+
+static void cocoa_clipboard_notify(Notifier *notifier, void *data)
+{
+    QemuClipboardNotify *notify = data;
+
+    switch (notify->type) {
+    case QEMU_CLIPBOARD_UPDATE_INFO:
+        cocoa_clipboard_update_info(notify->info);
+        return;
+    case QEMU_CLIPBOARD_RESET_SERIAL:
+        /* ignore */
+        return;
+    }
 }
 
 static void cocoa_clipboard_request(QemuClipboardInfo *info,
@@ -132,94 +386,28 @@ static void cocoa_clipboard_request(QemuClipboardInfo *info,
     }
 }
 
-/*
- * The startup process for the OSX/Cocoa UI is complicated, because
- * OSX insists that the UI runs on the initial main thread, and so we
- * need to start a second thread which runs the vl.c qemu_main():
- *
- * Initial thread:                    2nd thread:
- * in main():
- *  create qemu-main thread
- *  wait on display_init semaphore
- *                                    call qemu_main()
- *                                    ...
- *                                    in cocoa_display_init():
- *                                     post the display_init semaphore
- *                                     wait on app_started semaphore
- *  create application, menus, etc
- *  enter OSX run loop
- * in applicationDidFinishLaunching:
- *  post app_started semaphore
- *                                     tell main thread to fullscreen if needed
- *                                    [...]
- *                                    run qemu main-loop
- *
- * We do this in two stages so that we don't do the creation of the
- * GUI application menus and so on for command line options like --help
- * where we want to just print text to stdout and exit immediately.
- */
-
-static void *call_qemu_main(void *opaque)
+int main(int argc, char **argv, char **envp)
 {
-    int status;
-
-    COCOA_DEBUG("Second thread: calling qemu_main()\n");
-    status = qemu_main(gArgc, gArgv, *_NSGetEnviron());
-    COCOA_DEBUG("Second thread: qemu_main() returned, exiting\n");
-    [cbowner release];
-    CGImageRelease(screen.cursor_cgimage);
-#ifdef CONFIG_OPENGL
-    g_free(dgs);
-    qemu_gl_fini_shader(gls);
-    if (view_ctx) {
-        cocoa_gl_destroy_context(NULL, view_ctx);
-    }
-    if (appController) {
-        [appController release];
-    }
-#endif
-    exit(status);
-}
-
-int main (int argc, char **argv) {
-    QemuThread thread;
+    QemuThread main_thread;
 
     COCOA_DEBUG("Entered main()\n");
-    gArgc = argc;
-    gArgv = argv;
 
-    qemu_sem_init(&display_init_sem, 0);
-    qemu_sem_init(&app_started_sem, 0);
+    /* Takes iothread lock.  */
+    qemu_init(argc, argv, envp);
+    if (!have_cocoa_ui) {
+         qemu_main_loop();
+         qemu_cleanup();
+         return 0;
+    }
 
-    qemu_thread_create(&thread, "qemu_main", call_qemu_main,
+    qemu_mutex_unlock_iothread();
+    qemu_thread_create(&main_thread, "qemu_main_loop", call_qemu_main_loop,
                        NULL, QEMU_THREAD_DETACHED);
-
-    qemu_mutex_init(&screen.draw_mutex);
-
-    COCOA_DEBUG("Main thread: waiting for display_init_sem\n");
-    qemu_sem_wait(&display_init_sem);
-    COCOA_DEBUG("Main thread: initializing app\n");
-
-    NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
-
-    // Pull this console process up to being a fully-fledged graphical
-    // app with a menubar and Dock icon
-    ProcessSerialNumber psn = { 0, kCurrentProcess };
-    TransformProcessType(&psn, kProcessTransformToForegroundApplication);
-
-    [QemuApplication sharedApplication];
-
-    // Create an Application controller
-    appController = [[QemuCocoaAppController alloc] initWithStartedSem:&app_started_sem
-                                                                screen:&screen];
-    [NSApp setDelegate:appController];
 
     // Start the main event loop
     COCOA_DEBUG("Main thread: entering OSX run loop\n");
     [NSApp run];
     COCOA_DEBUG("Main thread: left OSX run loop, exiting\n");
-
-    [pool release];
 
     return 0;
 }
@@ -230,8 +418,11 @@ int main (int argc, char **argv) {
 static void cocoa_update(DisplayChangeListener *dcl,
                          int x, int y, int w, int h)
 {
-    NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
     DisplaySurface *updated = screen.surface;
+
+    if (container_of(dcl, CocoaListener, dcl) != screen.active_listener) {
+        return;
+    }
 
     COCOA_DEBUG("qemu_cocoa: cocoa_update\n");
 
@@ -248,37 +439,29 @@ static void cocoa_update(DisplayChangeListener *dcl,
         NSRect rect = NSMakeRect(x * d, (full_height - y - h) * d, w * d, h * d);
         [[appController cocoaView] setNeedsDisplayInRect:rect];
     });
-
-    [pool release];
 }
 
 static void cocoa_switch(DisplayChangeListener *dcl,
                          DisplaySurface *new_surface)
 {
-    NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
-    static bool updating_screen;
-
     COCOA_DEBUG("qemu_cocoa: cocoa_switch\n");
 
-    [[appController cocoaView] updateUIInfo];
+    if (container_of(dcl, CocoaListener, dcl) != screen.active_listener) {
+        return;
+    }
 
     qemu_mutex_lock(&screen.draw_mutex);
     screen.surface = new_surface;
-    if (!updating_screen) {
-        updating_screen = true;
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            qemu_mutex_lock(&screen.draw_mutex);
-            updating_screen = false;
-            int w = surface_width(screen.surface);
-            int h = surface_height(screen.surface);
-            qemu_mutex_unlock(&screen.draw_mutex);
-
-            [[appController cocoaView] updateScreenWidth:w height:h];
-        });
-    }
     qemu_mutex_unlock(&screen.draw_mutex);
-    [pool release];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        qemu_mutex_lock(&screen.draw_mutex);
+        int w = surface_width(screen.surface);
+        int h = surface_height(screen.surface);
+        qemu_mutex_unlock(&screen.draw_mutex);
+
+        [[appController cocoaView] updateScreenWidth:w height:h];
+    });
 }
 
 static void cocoa_refresh(DisplayChangeListener *dcl)
@@ -286,18 +469,12 @@ static void cocoa_refresh(DisplayChangeListener *dcl)
     NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
 
     COCOA_DEBUG("qemu_cocoa: cocoa_refresh\n");
-    graphic_hw_update(NULL);
 
-    if (qemu_input_is_absolute()) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (![[appController cocoaView] isAbsoluteEnabled]) {
-                if ([[appController cocoaView] isMouseGrabbed]) {
-                    [[appController cocoaView] ungrabMouse];
-                }
-            }
-            [[appController cocoaView] setAbsoluteEnabled:YES];
-        });
+    if (container_of(dcl, CocoaListener, dcl) != screen.active_listener) {
+        return;
     }
+
+    graphic_hw_update(dcl->con);
 
     if (cbchangecount != [[NSPasteboard generalPasteboard] changeCount]) {
         qemu_clipboard_info_unref(qemucb.info);
@@ -315,84 +492,102 @@ static void cocoa_refresh(DisplayChangeListener *dcl)
 
 static void cocoa_mouse_set(DisplayChangeListener *dcl, int x, int y, int on)
 {
+    CocoaListener *listener = container_of(dcl, CocoaListener, dcl);
+
     qemu_mutex_lock(&screen.draw_mutex);
     int full_height = surface_height(screen.surface);
-    size_t cursor_width = CGImageGetWidth(screen.cursor_cgimage);
-    size_t cursor_height = CGImageGetHeight(screen.cursor_cgimage);
-    int old_x = screen.mouse_x;
-    int old_y = screen.mouse_y;
-    int old_on = screen.mouse_on;
-    screen.mouse_x = x;
-    screen.mouse_y = y;
-    screen.mouse_on = on;
+    int old_x = listener->mouse_x;
+    int old_y = listener->mouse_y;
+    listener->mouse_x = x;
+    listener->mouse_y = y;
+    listener->mouse_on = on;
     qemu_mutex_unlock(&screen.draw_mutex);
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (old_on) {
+    if (listener == screen.active_listener && screen.cursor_cgimage) {
+        size_t cursor_width = CGImageGetWidth(screen.cursor_cgimage);
+        size_t cursor_height = CGImageGetHeight(screen.cursor_cgimage);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
             [[appController cocoaView] setNeedsDisplayForCursorX:old_x
                                                                y:old_y
                                                            width:cursor_width
-                                                           height:cursor_height
-                                                     screenHeight:full_height];
-        }
+                                                          height:cursor_height
+                                                    screenHeight:full_height];
 
-        if (on) {
             [[appController cocoaView] setNeedsDisplayForCursorX:x
                                                                y:y
                                                            width:cursor_width
-                                                           height:cursor_height
-                                                     screenHeight:full_height];
-        }
-    });
+                                                          height:cursor_height
+                                                    screenHeight:full_height];
+        });
+    }
+}
+
+static void cocoa_cursor_update()
+{
+    CGImageRef old_image = screen.cursor_cgimage;
+    CGImageRef new_image;
+    CocoaListener *active_listener = screen.active_listener;
+
+    if (active_listener->cursor) {
+        CGDataProviderRef provider = CGDataProviderCreateWithData(
+            NULL,
+            active_listener->cursor->data,
+            active_listener->cursor->width * active_listener->cursor->height * 4,
+            NULL
+        );
+
+        new_image = CGImageCreate(
+            active_listener->cursor->width, //width
+            active_listener->cursor->height, //height
+            8, //bitsPerComponent
+            32, //bitsPerPixel
+            active_listener->cursor->width * 4, //bytesPerRow
+            CGColorSpaceCreateWithName(kCGColorSpaceSRGB), //colorspace
+            kCGBitmapByteOrder32Little | kCGImageAlphaFirst, //bitmapInfo
+            provider, //provider
+            NULL, //decode
+            0, //interpolate
+            kCGRenderingIntentDefault //intent
+        );
+
+        CGDataProviderRelease(provider);
+    } else {
+        new_image = NULL;
+    }
+
+    qemu_mutex_lock(&screen.draw_mutex);
+    screen.cursor_cgimage = new_image;
+    qemu_mutex_unlock(&screen.draw_mutex);
+
+    CGImageRelease(old_image);
 }
 
 static void cocoa_cursor_define(DisplayChangeListener *dcl, QEMUCursor *cursor)
 {
-    int width = cursor->width;
-    int height = cursor->height;
+    CocoaListener *listener = container_of(dcl, CocoaListener, dcl);
 
-    CGDataProviderRef dataProviderRef = CGDataProviderCreateWithData(
-        NULL,
-        cursor->data,
-        width * height * 4,
-        NULL
-    );
+    listener->cursor = cursor;
 
-    CGImageRef imageRef = CGImageCreate(
-        width, //width
-        height, //height
-        8, //bitsPerComponent
-        32, //bitsPerPixel
-        width * 4, //bytesPerRow
-        CGColorSpaceCreateWithName(kCGColorSpaceSRGB), //colorspace
-        kCGBitmapByteOrder32Little | kCGImageAlphaFirst, //bitmapInfo
-        dataProviderRef, //provider
-        NULL, //decode
-        0, //interpolate
-        kCGRenderingIntentDefault //intent
-    );
+    if (listener == screen.active_listener) {
+        int full_height = surface_height(screen.surface);
+        int width = cursor->width;
+        int height = cursor->height;
+        int x = listener->mouse_x;
+        int y = listener->mouse_y;
+        size_t old_width;
+        size_t old_height;
 
-    qemu_mutex_lock(&screen.draw_mutex);
-    int full_height = surface_height(screen.surface);
-    int x = screen.mouse_x;
-    int y = screen.mouse_y;
-    int on = screen.mouse_on;
-    size_t old_width;
-    size_t old_height;
-    if (screen.cursor_cgimage) {
-        old_width = CGImageGetWidth(screen.cursor_cgimage);
-        old_height = CGImageGetHeight(screen.cursor_cgimage);
-    } else {
-        old_width = 0;
-        old_height = 0;
-    }
-    screen.cursor_cgimage = CGImageCreateCopy(imageRef);
-    qemu_mutex_unlock(&screen.draw_mutex);
+        if (screen.cursor_cgimage) {
+            old_width = CGImageGetWidth(screen.cursor_cgimage);
+            old_height = CGImageGetHeight(screen.cursor_cgimage);
+        } else {
+            old_width = 0;
+            old_height = 0;
+        }
 
-    CGImageRelease(imageRef);
-    CGDataProviderRelease(dataProviderRef);
+        cocoa_cursor_update();
 
-    if (on) {
         dispatch_async(dispatch_get_main_queue(), ^{
             CGFloat d = [[appController cocoaView] frame].size.height / full_height;
             NSRect rect;
@@ -403,12 +598,10 @@ static void cocoa_cursor_define(DisplayChangeListener *dcl, QEMUCursor *cursor)
             rect.size.height = d * old_height;
             [[appController cocoaView] setNeedsDisplayInRect:rect];
 
-            rect.origin.x = d * x;
-            rect.origin.y = d * (full_height - y - height);
             rect.size.width = d * width;
             rect.size.height = d * height;
             [[appController cocoaView] setNeedsDisplayInRect:rect];
-       });
+        });
     }
 }
 
@@ -433,19 +626,13 @@ static void with_view_ctx(CodeBlock block)
     }
 #endif
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [(NSOpenGLContext *)view_ctx lock];
     [(NSOpenGLContext *)view_ctx makeCurrentContext];
     block();
     [(NSOpenGLContext *)view_ctx unlock];
-#pragma clang diagnostic pop
 }
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-static NSOpenGLContext *cocoa_gl_create_context_ns(NSOpenGLContext *share_context,
-                                                   int bpp)
+static NSOpenGLPixelFormat *cocoa_gl_create_ns_pixel_format(int bpp)
 {
     NSOpenGLPixelFormatAttribute attributes[] = {
         NSOpenGLPFAOpenGLProfile,
@@ -455,58 +642,51 @@ static NSOpenGLContext *cocoa_gl_create_context_ns(NSOpenGLContext *share_contex
         NSOpenGLPFADoubleBuffer,
         0,
     };
-    NSOpenGLPixelFormat *format;
-    NSOpenGLContext *ctx;
 
-    format = [[NSOpenGLPixelFormat alloc] initWithAttributes:attributes];
-    ctx = [[NSOpenGLContext alloc] initWithFormat:format shareContext:share_context];
-    [format release];
-
-    [ctx retain];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [ctx setView:[appController cocoaView]];
-        [ctx release];
-    });
-
-    return (QEMUGLContext)ctx;
+    return [[NSOpenGLPixelFormat alloc] initWithAttributes:attributes];
 }
-#pragma clang diagnostic pop
 
-static int cocoa_gl_make_context_current(void *dg, QEMUGLContext ctx)
+static int cocoa_gl_make_context_current(DisplayGLCtx *dgc, QEMUGLContext ctx)
 {
 #ifdef CONFIG_EGL
     if (egl_surface) {
-        EGLSurface surface = ctx == EGL_NO_CONTEXT ? EGL_NO_SURFACE : egl_surface;
-        return eglMakeCurrent(qemu_egl_display, surface, surface, ctx);
+        EGLSurface current_surface = ctx == EGL_NO_CONTEXT ? EGL_NO_SURFACE : egl_surface;
+        return eglMakeCurrent(qemu_egl_display, current_surface, current_surface, ctx);
     }
 #endif
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     if (ctx) {
         [(NSOpenGLContext *)ctx makeCurrentContext];
     } else {
         [NSOpenGLContext clearCurrentContext];
     }
-#pragma clang diagnostic pop
 
     return 0;
 }
 
-static QEMUGLContext cocoa_gl_create_context(void *dg, QEMUGLParams *params)
+static QEMUGLContext cocoa_gl_create_context(DisplayGLCtx *dgc,
+                                             QEMUGLParams *params)
 {
+    NSOpenGLPixelFormat *format;
+    NSOpenGLContext *ctx;
+    int bpp;
+
 #ifdef CONFIG_EGL
     if (egl_surface) {
         eglMakeCurrent(qemu_egl_display, egl_surface, egl_surface, view_ctx);
-        return qemu_egl_create_context(dg, params);
+        return qemu_egl_create_context(dgc, params);
     }
 #endif
 
-    int bpp = PIXMAN_FORMAT_BPP(surface_format(screen.surface));
-    return cocoa_gl_create_context_ns(view_ctx, bpp);
+    bpp = PIXMAN_FORMAT_BPP(surface_format(screen.surface));
+    format = cocoa_gl_create_ns_pixel_format(bpp);
+    ctx = [[NSOpenGLContext alloc] initWithFormat:format shareContext:view_ctx];
+    [format release];
+
+    return (QEMUGLContext)ctx;
 }
 
-static void cocoa_gl_destroy_context(void *dg, QEMUGLContext ctx)
+static void cocoa_gl_destroy_context(DisplayGLCtx *dgc, QEMUGLContext ctx)
 {
 #ifdef CONFIG_EGL
     if (egl_surface) {
@@ -515,10 +695,7 @@ static void cocoa_gl_destroy_context(void *dg, QEMUGLContext ctx)
     }
 #endif
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [(NSOpenGLContext *)ctx release];
-#pragma clang diagnostic pop
 }
 
 static void cocoa_gl_flush()
@@ -530,213 +707,239 @@ static void cocoa_gl_flush()
     }
 #endif
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [[NSOpenGLContext currentContext] flushBuffer];
 
     dispatch_async(dispatch_get_main_queue(), ^{
         [(NSOpenGLContext *)view_ctx update];
     });
-#pragma clang diagnostic pop
-}
-
-static void cocoa_scanout_disable(DisplayGL *dg)
-{
-    if (!dg->scanout_id) {
-        return;
-    }
-
-    dg->scanout_id = 0;
-
-    if (screen.surface) {
-        surface_gl_destroy_texture(gls, screen.surface);
-        surface_gl_create_texture(gls, screen.surface);
-    }
-}
-
-static void cocoa_gl_render_cursor()
-{
-    if (!screen.mouse_on) {
-        return;
-    }
-
-    QemuCocoaView *cocoaView = [appController cocoaView];
-    NSSize size = [cocoaView convertSizeToBacking:[cocoaView frame].size];
-    int full_height = surface_height(screen.surface);
-    CGFloat d = size.height / full_height;
-
-    glViewport(
-        d * screen.mouse_x,
-        d * (full_height - screen.mouse_y - cursor_texture_height),
-        d * cursor_texture_width,
-        d * cursor_texture_height
-    );
-    glBindTexture(GL_TEXTURE_2D, cursor_texture);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    qemu_gl_run_texture_blit(gls, false, false);
-    glDisable(GL_BLEND);
-}
-
-static void cocoa_gl_render_surface(DisplayGL *dg)
-{
-    cocoa_scanout_disable(dg);
-
-    QemuCocoaView *cocoaView = [appController cocoaView];
-    NSSize size = [cocoaView convertSizeToBacking:[cocoaView frame].size];
-
-    surface_gl_setup_viewport(gls, screen.surface, size.width, size.height);
-    glBindTexture(GL_TEXTURE_2D, screen.surface->texture);
-    surface_gl_render_texture(gls, screen.surface);
-
-    cocoa_gl_render_cursor();
-
-    cocoa_gl_flush();
 }
 
 static void cocoa_gl_update(DisplayChangeListener *dcl,
                             int x, int y, int w, int h)
 {
+    CocoaListener *listener = container_of(dcl, CocoaListener, dcl);
+
+    if (listener != screen.active_listener) {
+        return;
+    }
+
     with_view_ctx(^{
-        surface_gl_update_texture(gls, screen.surface, x, y, w, h);
-        dgs[qemu_console_get_index(dcl->con)].surface_dirty = true;
+        surface_gl_update_texture(dgc.gls, screen.surface, x, y, w, h);
+        gl_dirty = true;
     });
+}
+
+static void cocoa_gl_cursor_render()
+{
+    if (!screen.active_listener->mouse_on) {
+        return;
+    }
+
+    QemuCocoaView *cocoaView = [appController cocoaView];
+    NSSize size = [cocoaView convertSizeToBacking:[cocoaView frame].size];
+    CGFloat d = size.height / surface_height(screen.surface);
+    CocoaListener *active_listener = screen.active_listener;
+
+    glViewport(
+        d * active_listener->mouse_x,
+        size.height - d * (active_listener->mouse_y + active_listener->cursor->height),
+        d * active_listener->cursor->width,
+        d * active_listener->cursor->height
+    );
+    glBindTexture(GL_TEXTURE_2D, cursor_texture);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    qemu_gl_run_texture_blit(dgc.gls, false);
+    glDisable(GL_BLEND);
 }
 
 static void cocoa_gl_switch(DisplayChangeListener *dcl,
                             DisplaySurface *new_surface)
 {
-    cocoa_switch(dcl, new_surface);
+    CocoaListener *listener = container_of(dcl, CocoaListener, dcl);
+
+    if (listener != screen.active_listener) {
+        return;
+    }
 
     with_view_ctx(^{
-        surface_gl_create_texture(gls, new_surface);
+        surface_gl_destroy_texture(dgc.gls, screen.surface);
+        surface_gl_create_texture(dgc.gls, new_surface);
     });
+
+    cocoa_switch(dcl, new_surface);
+    gl_dirty = true;
 }
 
 static void cocoa_gl_refresh(DisplayChangeListener *dcl)
 {
+    CocoaListener *listener = container_of(dcl, CocoaListener, dcl);
+
+    if (listener != screen.active_listener) {
+        return;
+    }
+
     cocoa_refresh(dcl);
 
-    with_view_ctx(^{
-        DisplayGL *dg = dgs + qemu_console_get_index(dcl->con);
+    if (gl_dirty) {
+        gl_dirty = false;
 
-        if (dg->surface_dirty && screen.surface) {
-            dg->surface_dirty = false;
-            cocoa_gl_render_surface(dg);
-        }
-    });
+        with_view_ctx(^{
+            QemuCocoaView *view = [appController cocoaView];
+            NSSize size = [view convertSizeToBacking:[view frame].size];
+
+            if (listener->gl_scanout_borrow) {
+                bool y0_top;
+                GLint texture =
+                    listener->gl_scanout_borrow(listener->gl_scanout_id,
+                                                &y0_top, NULL, NULL);
+
+                glBindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
+                glViewport(0, 0, size.width, size.height);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                qemu_gl_run_texture_blit(dgc.gls, y0_top);
+            } else {
+                surface_gl_setup_viewport(dgc.gls, screen.surface,
+                                          size.width, size.height);
+                glBindTexture(GL_TEXTURE_2D, screen.surface->texture);
+                surface_gl_render_texture(dgc.gls, screen.surface);
+            }
+
+            cocoa_gl_cursor_render();
+            cocoa_gl_flush();
+        });
+    }
 }
 
-static bool cocoa_gl_scanout_get_enabled(void *dg)
+static void cocoa_gl_scanout_disable(DisplayChangeListener *dcl)
 {
-    return ((DisplayGL *)dg)->scanout_id != 0;
+    CocoaListener *listener = container_of(dcl, CocoaListener, dcl);
+
+    listener->gl_scanout_borrow = NULL;
+
+    if (listener == screen.active_listener) {
+        gl_dirty = screen.surface != NULL;
+    }
 }
 
-static void cocoa_gl_scanout_disable(void *dg)
+static void cocoa_gl_cursor_update()
 {
-    with_view_ctx(^{
-        cocoa_scanout_disable((DisplayGL *)dg);
-    });
+    if (screen.active_listener->cursor) {
+        with_view_ctx(^{
+            glBindTexture(GL_TEXTURE_2D, cursor_texture);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT,
+                          screen.active_listener->cursor->width);
+            glTexImage2D(GL_TEXTURE_2D, 0,
+                         epoxy_is_desktop_gl() ? GL_RGBA : GL_BGRA,
+                         screen.active_listener->cursor->width,
+                         screen.active_listener->cursor->height,
+                         0, GL_BGRA, GL_UNSIGNED_BYTE,
+                         screen.active_listener->cursor->data);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        });
+    }
+
+    gl_dirty = true;
 }
 
-static void cocoa_gl_scanout_texture(void *dg,
+static void cocoa_gl_cursor_define(DisplayChangeListener *dcl, QEMUCursor *cursor)
+{
+    CocoaListener *listener = container_of(dcl, CocoaListener, dcl);
+
+    listener->cursor = cursor;
+
+    if (listener == screen.active_listener) {
+        cocoa_gl_cursor_update();
+    }
+}
+
+static void cocoa_gl_scanout_texture(DisplayChangeListener *dcl,
                                      uint32_t backing_id,
                                      DisplayGLTextureBorrower backing_borrow,
                                      uint32_t x, uint32_t y,
                                      uint32_t w, uint32_t h)
 {
-    ((DisplayGL *)dg)->scanout_id = backing_id;
-    ((DisplayGL *)dg)->scanout_borrow = backing_borrow;
+    CocoaListener *listener = container_of(dcl, CocoaListener, dcl);
+
+    listener->gl_scanout_id = backing_id;
+    listener->gl_scanout_borrow = backing_borrow;
+    gl_dirty = true;
 }
 
 static void cocoa_gl_scanout_flush(DisplayChangeListener *dcl,
-                                   uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+                                   uint32_t x, uint32_t y,
+                                   uint32_t w, uint32_t h)
 {
-    DisplayGL *dg = dgs + qemu_console_get_index(dcl->con);
-    bool y0_top;
-
-    if (!dg->scanout_id) {
-        return;
+    if (container_of(dcl, CocoaListener, dcl) == screen.active_listener) {
+        gl_dirty = true;
     }
-
-    GLint texture = dg->scanout_borrow(dg->scanout_id, &y0_top, NULL, NULL);
-    if (!texture) {
-        return;
-    }
-
-    with_view_ctx(^{
-        QemuCocoaView *cocoaView = [appController cocoaView];
-        NSSize size = [cocoaView convertSizeToBacking:[cocoaView frame].size];
-
-        glBindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
-        glViewport(0, 0, size.width, size.height);
-        glBindTexture(GL_TEXTURE_2D, texture);
-        qemu_gl_run_texture_blit(gls, y0_top, false);
-
-        cocoa_gl_render_cursor();
-
-        cocoa_gl_flush();
-    });
 }
 
 static void cocoa_gl_mouse_set(DisplayChangeListener *dcl, int x, int y, int on)
 {
-    screen.mouse_x = x;
-    screen.mouse_y = y;
-    screen.mouse_on = on;
+    CocoaListener *listener = container_of(dcl, CocoaListener, dcl);
 
-    DisplayGL *dg = dgs + qemu_console_get_index(dcl->con);
+    listener->mouse_x = x;
+    listener->mouse_y = y;
+    listener->mouse_on = on;
 
-    if (dg->scanout_id) {
-        cocoa_gl_scanout_flush(dcl, 0, 0, 0, 0);
-    } else {
-        with_view_ctx(^{
-            cocoa_gl_render_surface(dg);
-        });
+    if (listener == screen.active_listener) {
+        gl_dirty = true;
     }
 }
 
-static void cocoa_gl_cursor_define(DisplayChangeListener *dcl, QEMUCursor *cursor)
-{
-    cursor_texture_width = cursor->width;
-    cursor_texture_height = cursor->height;
+static const DisplayChangeListenerOps dcl_gl_ops = {
+    .dpy_name               = "cocoa-gl",
+    .dpy_gfx_update         = cocoa_gl_update,
+    .dpy_gfx_switch         = cocoa_gl_switch,
+    .dpy_gfx_check_format   = console_gl_check_format,
+    .dpy_refresh            = cocoa_gl_refresh,
+    .dpy_mouse_set          = cocoa_gl_mouse_set,
+    .dpy_cursor_define      = cocoa_gl_cursor_define,
 
-    with_view_ctx(^{
-        glBindTexture(GL_TEXTURE_2D, cursor_texture);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, cursor->width);
-        glTexImage2D(GL_TEXTURE_2D, 0,
-                     epoxy_is_desktop_gl() ? GL_RGBA : GL_BGRA,
-                     cursor->width,
-                     cursor->height,
-                     0, GL_BGRA, GL_UNSIGNED_BYTE,
-                     cursor->data);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    });
+    .dpy_gl_scanout_disable = cocoa_gl_scanout_disable,
+    .dpy_gl_scanout_texture = cocoa_gl_scanout_texture,
+    .dpy_gl_update          = cocoa_gl_scanout_flush,
+};
+
+static bool cocoa_gl_is_compatible_dcl(DisplayGLCtx *dgc,
+                                       DisplayChangeListener *dcl)
+{
+    return dcl->ops == &dcl_gl_ops;
 }
 
-static const DisplayGLOps dg_ops = {
-    .dpy_gl_ctx_create           = cocoa_gl_create_context,
-    .dpy_gl_ctx_destroy          = cocoa_gl_destroy_context,
-    .dpy_gl_ctx_make_current     = cocoa_gl_make_context_current,
-    .dpy_gl_scanout_get_enabled  = cocoa_gl_scanout_get_enabled,
-    .dpy_gl_scanout_disable      = cocoa_gl_scanout_disable,
-    .dpy_gl_scanout_texture      = cocoa_gl_scanout_texture,
-};
-
-static const DisplayChangeListenerOps dcl_gl_ops = {
-    .dpy_name                = "cocoa-gl",
-    .dpy_gfx_update          = cocoa_gl_update,
-    .dpy_gfx_switch          = cocoa_gl_switch,
-    .dpy_gfx_check_format    = console_gl_check_format,
-    .dpy_refresh             = cocoa_gl_refresh,
-    .dpy_mouse_set           = cocoa_gl_mouse_set,
-    .dpy_cursor_define       = cocoa_gl_cursor_define,
-
-    .dpy_gl_update           = cocoa_gl_scanout_flush,
-};
-
 #endif
+
+void cocoa_listener_select(size_t index)
+{
+    DisplaySurface *new_surface;
+
+    if (index >= screen.listeners_count) {
+        return;
+    }
+
+    qemu_mutex_lock(&screen.draw_mutex);
+    screen.active_listener = &screen.listeners[index];
+    qemu_mutex_unlock(&screen.draw_mutex);
+
+    new_surface = qemu_console_surface(screen.active_listener->dcl.con);
+    qkbd_state_lift_all_keys(screen.kbd);
+    qkbd_state_free(screen.kbd);
+    screen.kbd = qkbd_state_init(screen.active_listener->dcl.con);
+
+    if (display_opengl) {
+#ifdef CONFIG_OPENGL
+        cocoa_gl_cursor_update();
+        cocoa_gl_switch(&screen.active_listener->dcl, new_surface);
+#else
+        g_assert_not_reached();
+#endif
+    } else {
+        cocoa_cursor_update();
+        cocoa_switch(&screen.active_listener->dcl, new_surface);
+    }
+}
 
 static void cocoa_display_early_init(DisplayOptions *o)
 {
@@ -748,43 +951,30 @@ static void cocoa_display_early_init(DisplayOptions *o)
 
 static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
 {
+    NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
+    ProcessSerialNumber psn = { 0, kCurrentProcess };
+    QemuCocoaView *cocoaView;
+    const DisplayChangeListenerOps *ops;
+    size_t index;
+
     COCOA_DEBUG("qemu_cocoa: cocoa_display_init\n");
+    have_cocoa_ui = 1;
 
-    screen.cursor_show = opts->has_show_cursor && opts->show_cursor;
-    screen.swap_option_command = opts->u.cocoa.has_swap_option_command &&
-        opts->u.cocoa.swap_option_command;
+    // Pull this console process up to being a fully-fledged graphical
+    // app with a menubar and Dock icon
+    TransformProcessType(&psn, kProcessTransformToForegroundApplication);
 
-    /* Tell main thread to go ahead and create the app and enter the run loop */
-    qemu_sem_post(&display_init_sem);
-    qemu_sem_wait(&app_started_sem);
-    COCOA_DEBUG("cocoa_display_init: app start completed\n");
+    [QemuApplication sharedApplication];
 
-    /* if fullscreen mode is to be used */
-    if (opts->has_full_screen && opts->full_screen) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [[[appController cocoaView] window] toggleFullScreen: nil];
-        });
-    }
-    if (opts->u.cocoa.has_full_grab && opts->u.cocoa.full_grab) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [[appController cocoaView] setFullGrab: nil];
-        });
-    }
+    // Create an Application controller
+    appController = [[QemuCocoaAppController alloc] initWithScreen:&screen];
+    cocoaView = [appController cocoaView];
+    [NSApp setDelegate:appController];
+
+    qemu_mutex_init(&screen.draw_mutex);
 
     if (display_opengl) {
 #ifdef CONFIG_OPENGL
-        unsigned int console_count = 0;
-        while (qemu_console_lookup_by_index(console_count)) {
-            console_count++;
-        }
-
-        dgs = g_new0(DisplayGL, console_count);
-
-        for (unsigned int index = 0; index < console_count; index++) {
-            QemuConsole *con = qemu_console_lookup_by_index(index);
-            console_set_displayglcontext(con, dgs + index);
-        }
-
         if (opts->gl == DISPLAYGL_MODE_ES) {
 #ifdef CONFIG_EGL
             if (qemu_egl_init_dpy_cocoa(DISPLAYGL_MODE_ES)) {
@@ -794,44 +984,107 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
             if (!view_ctx) {
                 exit(1);
             }
-            dispatch_sync(dispatch_get_main_queue(), ^{
-                CALayer *layer = [[appController cocoaView] layer];
-                egl_surface = qemu_egl_init_surface(view_ctx, layer);
-            });
+            [cocoaView setWantsLayer:YES];
+            egl_surface = qemu_egl_init_surface(view_ctx, [cocoaView layer]);
+            if (!egl_surface) {
+                exit(1);
+            }
 #else
             error_report("OpenGLES without EGL is not supported - exiting");
             exit(1);
 #endif
         } else {
-            view_ctx = cocoa_gl_create_context_ns(nil, 32);
+            NSOpenGLPixelFormat *format = cocoa_gl_create_ns_pixel_format(32);
+            NSOpenGLView *view = [[NSOpenGLView alloc] initWithFrame:[cocoaView frame]
+                                                         pixelFormat:format];
+            [format release];
+            [cocoaView addSubview:view];
+            view_ctx = [view openGLContext];
+            [view release];
 #ifdef CONFIG_EGL
             egl_surface = EGL_NO_SURFACE;
 #endif
-            cocoa_gl_make_context_current(NULL, view_ctx);
+            cocoa_gl_make_context_current(&dgc, view_ctx);
         }
 
-        gls = qemu_gl_init_shader();
+        dgc.gls = qemu_gl_init_shader();
         glGenTextures(1, &cursor_texture);
 
         // register vga output callbacks
-        screen.dcl.ops = &dcl_gl_ops;
-
-        register_displayglops(&dg_ops);
+        ops = &dcl_gl_ops;
 #else
         error_report("OpenGL is not enabled - exiting");
         exit(1);
 #endif
     } else {
         // register vga output callbacks
-        screen.dcl.ops = &dcl_ops;
+        ops = &dcl_ops;
     }
 
-    register_displaychangelistener(&screen.dcl);
-    qatomic_store_release(&screen.inited, true);
+    while (qemu_console_lookup_by_index(screen.listeners_count)) {
+        screen.listeners_count++;
+    }
+
+    if (screen.listeners_count) {
+        QemuConsole *con = qemu_console_lookup_first_graphic_console();
+        screen.listeners = g_new0(CocoaListener, screen.listeners_count);
+        screen.active_listener = screen.listeners + qemu_console_get_index(con);
+
+        for (index = 0; index < screen.listeners_count; index++) {
+            screen.listeners[index].dcl.con = qemu_console_lookup_by_index(index);
+            screen.listeners[index].dcl.ops = ops;
+
+            if (display_opengl) {
+                qemu_console_set_display_gl_ctx(screen.listeners[index].dcl.con,
+                                                &dgc);
+            }
+
+            // register vga output callbacks
+            register_displaychangelistener(&screen.listeners[index].dcl);
+        }
+
+        screen.kbd = qkbd_state_init(screen.active_listener->dcl.con);
+    }
+
+    qemu_add_mouse_mode_change_notifier(&mouse_mode_change_notifier);
+    [cocoaView setAbsoluteEnabled:qemu_input_is_absolute()];
+
+    create_initial_menus();
+
+    /*
+     * Create the menu entries which depend on QEMU state (for consoles
+     * and removeable devices). These make calls back into QEMU functions,
+     * which is OK because at this point we know that the second thread
+     * holds the iothread lock and is synchronously waiting for us to
+     * finish.
+     */
+    add_console_menu_entries();
+    addRemovableDevicesMenuItems();
 
     qemu_event_init(&qemucb.event, false);
     cbowner = [[QemuCocoaPasteboardTypeOwner alloc] initWith:&qemucb];
+
+    if (opts->has_full_screen && opts->full_screen) {
+        [[cocoaView window] toggleFullScreen: nil];
+    }
+    if (opts->u.cocoa.has_full_grab && opts->u.cocoa.full_grab) {
+        [cocoaView setFullGrab: nil];
+    }
+
+    if (opts->has_show_cursor) {
+        screen.cursor_show = opts->show_cursor;
+    }
+    if (opts->u.cocoa.has_swap_opt_cmd) {
+        screen.swap_opt_cmd = opts->u.cocoa.swap_opt_cmd;
+    }
+
+    if (opts->u.cocoa.has_left_command_key) {
+        screen.left_command_key_disabled = opts->u.cocoa.left_command_key;
+    }
+
+    [cocoaView updateUIInfo];
     qemu_clipboard_peer_register(&cbpeer);
+    [pool release];
 }
 
 static QemuDisplay qemu_display_cocoa = {

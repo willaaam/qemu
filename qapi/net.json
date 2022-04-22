@@ -453,112 +453,117 @@
     '*queues':       'int' } }
 
 ##
-# @VmnetOperatingMode:
+# @NetdevVmnetHostOptions:
 #
-# The operating modes in which a vmnet netdev can run
-# Only available on macOS
+# vmnet (host mode) network backend.
 #
-# @host: the guest may communicate with the host
-#        and other guest network interfaces
+# Allows the vmnet interface to communicate with other vmnet
+# interfaces that are in host mode and also with the host.
 #
-# @shared: the guest may reach the Internet through a NAT,
-#          and may communicate with the host and other guest
-#          network interfaces
+# @start-address: The starting IPv4 address to use for the interface.
+#                 Must be in the private IP range (RFC 1918). Must be
+#                 specified along with @end-address and @subnet-mask.
+#                 This address is used as the gateway address. The
+#                 subsequent address up to and including end-address are
+#                 placed in the DHCP pool.
 #
-# @bridged: the guest's traffic is bridged with a
-#           physical network interface of the host
+# @end-address: The DHCP IPv4 range end address to use for the
+#               interface. Must be in the private IP range (RFC 1918).
+#               Must be specified along with @start-address and
+#               @subnet-mask.
 #
-# Since: 6.0
+# @subnet-mask: The IPv4 subnet mask to use on the interface. Must
+#               be specified along with @start-address and @subnet-mask.
+#
+# @isolated: Enable isolation for this interface. Interface isolation
+#            ensures that vmnet interface is not able to communicate
+#            with any other vmnet interfaces. Only communication with
+#            host is allowed. Requires at least macOS Big Sur 11.0.
+#
+# @net-uuid: The identifier (UUID) to uniquely identify the isolated
+#            network vmnet interface should be added to. If
+#            set, no DHCP service is provided for this interface and
+#            network communication is allowed only with other interfaces
+#            added to this network identified by the UUID. Requires
+#            at least macOS Big Sur 11.0.
+#
+# Since: 7.1
 ##
-{ 'enum': 'VmnetOperatingMode',
-  'data': [ 'host', 'shared', 'bridged' ],
-  'if': 'CONFIG_VMNET' }
-
-##
-# @NetdevVmnetModeOptionsBridged:
-#
-# Options for the vmnet-macos netdev
-# that are only available in 'bridged' mode
-# Only available on macOS
-#
-# @ifname: the physical network interface to bridge with
-#          (defaults to en0 if not specified)
-#
-# Since: 6.0
-##
-{ 'struct': 'NetdevVmnetModeOptionsBridged',
-  'data': { '*ifname':  'str' },
-  'if': 'CONFIG_VMNET' }
-
-##
-# @NetdevVmnetModeOptionsHostOrShared:
-#
-# Options for the vmnet-macos netdev
-# that are only available in 'host' or 'shared' mode
-# Only available on macOS
-#
-# @dhcp-start-address: the gateway address to use for the interface.
-#                      The range to dhcp_end_address is placed in the DHCP pool.
-#                      (only valid with mode=host|shared)
-#                      (must be specified with dhcp-end-address and
-#                       dhcp-subnet-mask)
-#                      (allocated automatically if unset)
-#
-# @dhcp-end-address: the DHCP IPv4 range end address to use for the interface.
-#                      (only valid with mode=host|shared)
-#                      (must be specified with dhcp-start-address and
-#                       dhcp-subnet-mask)
-#                      (allocated automatically if unset)
-#
-# @dhcp-subnet-mask: the IPv4 subnet mask (string) to use on the interface.
-#                    (only valid with mode=host|shared)
-#                    (must be specified with dhcp-start-address and
-#                     dhcp-end-address)
-#                    (allocated automatically if unset)
-#
-# Since: 6.0
-##
-{ 'struct': 'NetdevVmnetModeOptionsHostOrShared',
+{ 'struct': 'NetdevVmnetHostOptions',
   'data': {
-    '*dhcp-start-address': 'str' ,
-    '*dhcp-end-address':   'str',
-    '*dhcp-subnet-mask':   'str' },
+    '*start-address': 'str',
+    '*end-address':   'str',
+    '*subnet-mask':   'str',
+    '*isolated':      'bool',
+    '*net-uuid':      'str' },
   'if': 'CONFIG_VMNET' }
 
 ##
-# @NetdevVmnetModeOptions:
+# @NetdevVmnetSharedOptions:
 #
-# Options specific to different operating modes of a vmnet netdev
-# Only available on macOS
+# vmnet (shared mode) network backend.
 #
-# @mode: the operating mode vmnet should run in
+# Allows traffic originating from the vmnet interface to reach the
+# Internet through a network address translator (NAT).
+# The vmnet interface can communicate with the host and with
+# other shared mode interfaces on the same subnet. If no DHCP
+# settings, subnet mask and IPv6 prefix specified, the interface can
+# communicate with any of other interfaces in shared mode.
 #
-# Since: 6.0
+# @start-address: The starting IPv4 address to use for the interface.
+#                 Must be in the private IP range (RFC 1918). Must be
+#                 specified along with @end-address and @subnet-mask.
+#                 This address is used as the gateway address. The
+#                 subsequent address up to and including end-address are
+#                 placed in the DHCP pool.
+#
+# @end-address: The DHCP IPv4 range end address to use for the
+#               interface. Must be in the private IP range (RFC 1918).
+#               Must be specified along with @start-address and @subnet-mask.
+#
+# @subnet-mask: The IPv4 subnet mask to use on the interface. Must
+#                be specified along with @start-address and @subnet-mask.
+#
+# @isolated: Enable isolation for this interface. Interface isolation
+#            ensures that vmnet interface is not able to communicate
+#            with any other vmnet interfaces. Only communication with
+#            host is allowed. Requires at least macOS Big Sur 11.0.
+#
+# @nat66-prefix: The IPv6 prefix to use into guest network. Must be a
+#                unique local address i.e. start with fd00::/8 and have
+#                length of 64.
+#
+# Since: 7.1
 ##
-{ 'union': 'NetdevVmnetModeOptions',
-  'base': { 'mode': 'VmnetOperatingMode' },
-  'discriminator': 'mode',
+{ 'struct': 'NetdevVmnetSharedOptions',
   'data': {
-    'bridged':      'NetdevVmnetModeOptionsBridged',
-    'host':         'NetdevVmnetModeOptionsHostOrShared',
-    'shared':       'NetdevVmnetModeOptionsHostOrShared' },
+    '*start-address': 'str',
+    '*end-address':   'str',
+    '*subnet-mask':   'str',
+    '*isolated':      'bool',
+    '*nat66-prefix':  'str' },
   'if': 'CONFIG_VMNET' }
 
 ##
-# @NetdevVmnetOptions:
+# @NetdevVmnetBridgedOptions:
 #
-# vmnet network backend
-# Only available on macOS
+# vmnet (bridged mode) network backend.
 #
-# @options: a structure specifying the mode and mode-specific options
-#           (once QAPI supports a union type as a branch to another union type,
-#            this structure can be changed to a union, and the contents of
-#            NetdevVmnetModeOptions moved here)
+# Bridges the vmnet interface with a physical network interface.
 #
-# Since: 6.0
+# @ifname: The name of the physical interface to be bridged.
+#
+# @isolated: Enable isolation for this interface. Interface isolation
+#            ensures that vmnet interface is not able to communicate
+#            with any other vmnet interfaces. Only communication with
+#            host is allowed. Requires at least macOS Big Sur 11.0.
+#
+# Since: 7.1
 ##
-{ 'struct': 'NetdevVmnetOptions',
-  'data': {'options': 'NetdevVmnetModeOptions' },
+{ 'struct': 'NetdevVmnetBridgedOptions',
+  'data': {
+    'ifname':     'str',
+    '*isolated':  'bool' },
   'if': 'CONFIG_VMNET' }
 
 ##
@@ -569,13 +574,16 @@
 # Since: 2.7
 #
 #        @vhost-vdpa since 5.1
-#
-#        @vmnet-macos since 6.0 (only available on macOS)
+#        @vmnet-host since 7.1
+#        @vmnet-shared since 7.1
+#        @vmnet-bridged since 7.1
 ##
 { 'enum': 'NetClientDriver',
   'data': [ 'none', 'nic', 'user', 'tap', 'l2tpv3', 'socket', 'vde',
             'bridge', 'hubport', 'netmap', 'vhost-user', 'vhost-vdpa',
-            { 'name': 'vmnet-macos', 'if': 'CONFIG_VMNET' } ] }
+            { 'name': 'vmnet-host', 'if': 'CONFIG_VMNET' },
+            { 'name': 'vmnet-shared', 'if': 'CONFIG_VMNET' },
+            { 'name': 'vmnet-bridged', 'if': 'CONFIG_VMNET' }] }
 
 ##
 # @Netdev:
@@ -589,8 +597,9 @@
 # Since: 1.2
 #
 #        'l2tpv3' - since 2.1
-#
-#        'vmnet-macos' since 6.0 (only available on macOS)
+#        'vmnet-host' - since 7.1
+#        'vmnet-shared' - since 7.1
+#        'vmnet-bridged' - since 7.1
 ##
 { 'union': 'Netdev',
   'base': { 'id': 'str', 'type': 'NetClientDriver' },
@@ -607,8 +616,12 @@
     'netmap':   'NetdevNetmapOptions',
     'vhost-user': 'NetdevVhostUserOptions',
     'vhost-vdpa': 'NetdevVhostVDPAOptions',
-    'vmnet-macos': { 'type': 'NetdevVmnetOptions',
-                     'if': 'CONFIG_VMNET' } } }
+    'vmnet-host': { 'type': 'NetdevVmnetHostOptions',
+                    'if': 'CONFIG_VMNET' },
+    'vmnet-shared': { 'type': 'NetdevVmnetSharedOptions',
+                      'if': 'CONFIG_VMNET' },
+    'vmnet-bridged': { 'type': 'NetdevVmnetBridgedOptions',
+                       'if': 'CONFIG_VMNET' } } }
 
 ##
 # @RxState:

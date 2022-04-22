@@ -30,6 +30,7 @@
 #include "ui/clipboard.h"
 #include "ui/console.h"
 #include "ui/kbd-state.h"
+#include "qemu/main-loop.h"
 #include "qemu/thread.h"
 
 //#define DEBUG
@@ -40,19 +41,30 @@
 #define COCOA_DEBUG(...)  ((void) 0)
 #endif
 
-typedef void (^CodeBlock)(void);
-typedef bool (^BoolCodeBlock)(void);
-
-typedef struct {
+typedef struct CocoaListener {
     DisplayChangeListener dcl;
-    DisplaySurface *surface;
-    QemuMutex draw_mutex;
+    QEMUCursor *cursor;
     int mouse_x;
     int mouse_y;
     int mouse_on;
+#ifdef CONFIG_OPENGL
+    uint32_t gl_scanout_id;
+    DisplayGLTextureBorrower gl_scanout_borrow;
+    bool gl_scanout_y0_top;
+#endif
+} CocoaListener;
+
+typedef struct {
+    CocoaListener *active_listener;
+    CocoaListener *listeners;
+    size_t listeners_count;
+    DisplaySurface *surface;
+    QemuMutex draw_mutex;
+    QKbdState *kbd;
     CGImageRef cursor_cgimage;
     int cursor_show;
-    bool swap_option_command;
+    bool left_command_key_disabled;
+    bool swap_opt_cmd;
     bool inited;
 } QEMUScreen;
 
@@ -68,7 +80,6 @@ typedef struct {
     QEMUScreen *screen;
     int screen_width;
     int screen_height;
-    QKbdState *kbd;
     BOOL isMouseGrabbed;
     BOOL isAbsoluteEnabled;
     CFMachPortRef eventsTap;
@@ -76,6 +87,7 @@ typedef struct {
 - (id)initWithFrame:(NSRect)frameRect
              screen:(QEMUScreen *)given_screen;
 - (void) frameUpdated;
+- (void) selectConsoleLocked:(unsigned int)index;
 - (NSSize) computeUnzoomedSize;
 - (NSSize) fixZoomedFullScreenSize:(NSSize)proposedSize;
 - (void) resizeWindow;
@@ -108,12 +120,9 @@ typedef struct {
 @interface QemuCocoaAppController : NSObject
                                        <NSWindowDelegate, NSApplicationDelegate>
 {
-    QemuSemaphore *started_sem;
-    NSArray * supportedImageFileTypes;
     QemuCocoaView *cocoaView;
 }
-- (id) initWithStartedSem:(QemuSemaphore *)given_started_sem
-                   screen:(QEMUScreen *)screen;
+- (id) initWithScreen:(QEMUScreen *)screen;
 - (QemuCocoaView *)cocoaView;
 @end
 
@@ -123,5 +132,10 @@ typedef struct {
 }
 - (id) initWith:(QemuCocoaClipboard *)aCb;
 @end
+
+void cocoa_listener_select(size_t index);
+
+typedef void (^CodeBlock)(void);
+typedef bool (^BoolCodeBlock)(void);
 
 #endif

@@ -713,7 +713,8 @@ static void add_to_speaker_buffer(DBDMA_io *io)
         return;
     }
     dma_memory_read(&address_space_memory, io->addr,
-                    &s->spk_buffer[s->spk_buffer_position], io->len);
+                    &s->spk_buffer[s->spk_buffer_position], io->len,
+                    MEMTXATTRS_UNSPECIFIED);
     s->spk_buffer_position += io->len;
     DPRINTF("%s() called - len: %d pos: %d/%d\n", __func__, io->len,
             s->spk_buffer_position, MAX_BUFFER_SIZE);
