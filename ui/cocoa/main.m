@@ -749,7 +749,7 @@ static void cocoa_gl_cursor_render()
     glBindTexture(GL_TEXTURE_2D, cursor_texture);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    qemu_gl_run_texture_blit(dgc.gls, false);
+    qemu_gl_run_texture_blit(dgc.gls, false, false);
     glDisable(GL_BLEND);
 }
 
@@ -797,7 +797,7 @@ static void cocoa_gl_refresh(DisplayChangeListener *dcl)
                 glBindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
                 glViewport(0, 0, size.width, size.height);
                 glBindTexture(GL_TEXTURE_2D, texture);
-                qemu_gl_run_texture_blit(dgc.gls, y0_top);
+                qemu_gl_run_texture_blit(dgc.gls, y0_top, false);
             } else {
                 surface_gl_setup_viewport(dgc.gls, screen.surface,
                                           size.width, size.height);
@@ -1035,8 +1035,12 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
             screen.listeners[index].dcl.ops = ops;
 
             if (display_opengl) {
+#ifdef CONFIG_OPENGL
                 qemu_console_set_display_gl_ctx(screen.listeners[index].dcl.con,
                                                 &dgc);
+#else
+                g_assert_not_reached();
+#endif
             }
 
             // register vga output callbacks
