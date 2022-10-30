@@ -40,6 +40,8 @@ static struct sdl2_console *sdl2_console;
 
 static SDL_Surface *guest_sprite_surface;
 static int gui_grab; /* if true, all keyboard/mouse events are grabbed */
+static bool alt_grab;
+static bool ctrl_grab;
 
 static int gui_saved_grab;
 static int gui_fullscreen;
@@ -86,7 +88,7 @@ void sdl2_window_create(struct sdl2_console *scon)
     if (scon->hidden) {
         flags |= SDL_WINDOW_HIDDEN;
     }
-#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
+#if defined(CONFIG_OPENGL)
     if (scon->opengl) {
         flags |= SDL_WINDOW_OPENGL;
     }
@@ -130,7 +132,7 @@ void sdl2_window_resize(struct sdl2_console *scon)
 static void sdl2_redraw(struct sdl2_console *scon)
 {
     if (scon->opengl) {
-#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
+#if defined(CONFIG_OPENGL)
         sdl2_gl_redraw(scon);
 #endif
     } else {
@@ -773,7 +775,7 @@ static const DisplayChangeListenerOps dcl_2d_ops = {
     .dpy_cursor_define    = sdl_mouse_define,
 };
 
-#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
+#if defined(CONFIG_OPENGL)
 static const DisplayChangeListenerOps dcl_gl_ops = {
     .dpy_name                = "sdl2-gl",
     .dpy_gfx_update          = sdl2_gl_update,
@@ -807,7 +809,7 @@ static void sdl2_display_early_init(DisplayOptions *o)
 {
     assert(o->type == DISPLAY_TYPE_SDL);
     if (o->has_gl && o->gl) {
-#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
+#if defined(CONFIG_OPENGL)
         display_opengl = 1;
 #endif
     }
@@ -853,6 +855,14 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
 
     gui_fullscreen = o->has_full_screen && o->full_screen;
 
+    if (o->u.sdl.has_grab_mod) {
+        if (o->u.sdl.grab_mod == HOT_KEY_MOD_LSHIFT_LCTRL_LALT) {
+            alt_grab = true;
+        } else if (o->u.sdl.grab_mod == HOT_KEY_MOD_RCTRL) {
+            ctrl_grab = true;
+        }
+    }
+
     for (i = 0;; i++) {
         QemuConsole *con = qemu_console_lookup_by_index(i);
         if (!con) {
@@ -873,7 +883,7 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
         }
         sdl2_console[i].idx = i;
         sdl2_console[i].opts = o;
-#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
+#if defined(CONFIG_OPENGL)
         sdl2_console[i].opengl = display_opengl;
         sdl2_console[i].dcl.ops = display_opengl ? &dcl_gl_ops : &dcl_2d_ops;
         sdl2_console[i].dgc.ops = display_opengl ? &gl_ctx_ops : NULL;
@@ -942,6 +952,6 @@ static void register_sdl1(void)
 
 type_init(register_sdl1);
 
-#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
+#if defined(CONFIG_OPENGL)
 module_dep("ui-opengl");
 #endif

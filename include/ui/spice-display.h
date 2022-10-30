@@ -32,7 +32,7 @@
 #include <IOSurface/IOSurfaceRef.h>
 #endif
 
-#if defined(CONFIG_OPENGL) && defined(CONFIG_EGL)
+#if defined(CONFIG_OPENGL)
 # if SPICE_SERVER_VERSION >= 0x000d01 /* release 0.13.1 */
 #  define HAVE_SPICE_GL 1
 #  include "ui/egl-helpers.h"

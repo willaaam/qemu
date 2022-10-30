@@ -51,15 +51,14 @@ static void virtio_ramfb_update_display(void *opaque)
     }
 }
 
-static int virtio_ramfb_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
+static void virtio_ramfb_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
 {
     VirtIORAMFBBase *vramfb = opaque;
     VirtIOGPUBase *g = vramfb->vgpu;
 
     if (g->hw_ops->ui_info) {
-        return g->hw_ops->ui_info(g, idx, info);
+        g->hw_ops->ui_info(g, idx, info);
     }
-    return -1;
 }
 
 static void virtio_ramfb_gl_block(void *opaque, bool block)

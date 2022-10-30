@@ -34,7 +34,7 @@
 #include "sysemu/sysemu.h"
 #include "qapi/qapi-commands-block.h"
 
-#ifdef CONFIG_EGL
+#ifdef CONFIG_OPENGL
 #include "ui/egl-context.h"
 #endif
 
@@ -53,7 +53,7 @@ static GLuint cursor_texture;
 static bool gl_dirty;
 static QEMUGLContext view_ctx;
 
-#ifdef CONFIG_EGL
+#ifdef CONFIG_OPENGL
 static EGLSurface egl_surface;
 #endif
 
@@ -618,13 +618,11 @@ static const DisplayChangeListenerOps dcl_ops = {
 
 static void with_view_ctx(CodeBlock block)
 {
-#ifdef CONFIG_EGL
     if (egl_surface) {
         eglMakeCurrent(qemu_egl_display, egl_surface, egl_surface, view_ctx);
         block();
         return;
     }
-#endif
 
     [(NSOpenGLContext *)view_ctx lock];
     [(NSOpenGLContext *)view_ctx makeCurrentContext];
@@ -648,12 +646,10 @@ static NSOpenGLPixelFormat *cocoa_gl_create_ns_pixel_format(int bpp)
 
 static int cocoa_gl_make_context_current(DisplayGLCtx *dgc, QEMUGLContext ctx)
 {
-#ifdef CONFIG_EGL
     if (egl_surface) {
         EGLSurface current_surface = ctx == EGL_NO_CONTEXT ? EGL_NO_SURFACE : egl_surface;
         return eglMakeCurrent(qemu_egl_display, current_surface, current_surface, ctx);
     }
-#endif
 
     if (ctx) {
         [(NSOpenGLContext *)ctx makeCurrentContext];
@@ -671,12 +667,10 @@ static QEMUGLContext cocoa_gl_create_context(DisplayGLCtx *dgc,
     NSOpenGLContext *ctx;
     int bpp;
 
-#ifdef CONFIG_EGL
     if (egl_surface) {
         eglMakeCurrent(qemu_egl_display, egl_surface, egl_surface, view_ctx);
         return qemu_egl_create_context(dgc, params);
     }
-#endif
 
     bpp = PIXMAN_FORMAT_BPP(surface_format(screen.surface));
     format = cocoa_gl_create_ns_pixel_format(bpp);
@@ -688,24 +682,20 @@ static QEMUGLContext cocoa_gl_create_context(DisplayGLCtx *dgc,
 
 static void cocoa_gl_destroy_context(DisplayGLCtx *dgc, QEMUGLContext ctx)
 {
-#ifdef CONFIG_EGL
     if (egl_surface) {
         eglDestroyContext(qemu_egl_display, ctx);
         return;
     }
-#endif
 
     [(NSOpenGLContext *)ctx release];
 }
 
 static void cocoa_gl_flush()
 {
-#ifdef CONFIG_EGL
     if (egl_surface) {
         eglSwapBuffers(qemu_egl_display, egl_surface);
         return;
     }
-#endif
 
     [[NSOpenGLContext currentContext] flushBuffer];
 
@@ -976,7 +966,6 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
     if (display_opengl) {
 #ifdef CONFIG_OPENGL
         if (opts->gl == DISPLAYGL_MODE_ES) {
-#ifdef CONFIG_EGL
             if (qemu_egl_init_dpy_cocoa(DISPLAYGL_MODE_ES)) {
                 exit(1);
             }
@@ -989,9 +978,6 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
             if (!egl_surface) {
                 exit(1);
             }
-#else
-            error_report("OpenGLES without EGL is not supported - exiting");
-            exit(1);
 #endif
         } else {
             NSOpenGLPixelFormat *format = cocoa_gl_create_ns_pixel_format(32);
@@ -1001,9 +987,7 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
             [cocoaView addSubview:view];
             view_ctx = [view openGLContext];
             [view release];
-#ifdef CONFIG_EGL
             egl_surface = EGL_NO_SURFACE;
-#endif
             cocoa_gl_make_context_current(&dgc, view_ctx);
         }
 
