@@ -577,7 +577,7 @@ EGLContext qemu_egl_init_ctx(void)
         EGL_NONE
     };
     static const EGLint ctx_att_gles[] = {
-        EGL_CONTEXT_CLIENT_VERSION, 3,
+        EGL_CONTEXT_CLIENT_VERSION, 2,
         EGL_NONE
     };
     bool gles = (qemu_egl_mode == DISPLAYGL_MODE_ES);
