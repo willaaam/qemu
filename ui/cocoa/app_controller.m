@@ -332,8 +332,8 @@ static void handleAnyDeviceErrors(Error * err)
 
     Error *err = NULL;
     qemu_mutex_lock_iothread();
-    qmp_eject(true, [drive cStringUsingEncoding: NSASCIIStringEncoding],
-              false, NULL, false, false, &err);
+    qmp_eject([drive cStringUsingEncoding: NSASCIIStringEncoding],
+              NULL, false, false, &err);
     qemu_mutex_unlock_iothread();
     handleAnyDeviceErrors(err);
 }
@@ -367,11 +367,11 @@ static void handleAnyDeviceErrors(Error * err)
 
         Error *err = NULL;
         qemu_mutex_lock_iothread();
-        qmp_blockdev_change_medium(true,
-                                   [drive cStringUsingEncoding:NSASCIIStringEncoding],
-                                   false, NULL,
+        qmp_blockdev_change_medium([drive cStringUsingEncoding:NSASCIIStringEncoding],
+                                   NULL,
                                    [file cStringUsingEncoding:NSASCIIStringEncoding],
-                                   true, "raw",
+                                   "raw",
+                                   true, false,
                                    false, 0,
                                    &err);
         qemu_mutex_unlock_iothread();
