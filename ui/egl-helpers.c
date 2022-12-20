@@ -389,6 +389,7 @@ EGLSurface qemu_egl_init_buffer_surface(EGLContext ectx,
     b = eglMakeCurrent(qemu_egl_display, esurface, esurface, ectx);
     if (b == EGL_FALSE) {
         error_report("egl: eglMakeCurrent failed");
+        qemu_egl_destroy_surface(esurface);
         return NULL;
     }
 

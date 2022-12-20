@@ -847,7 +847,7 @@ static int spice_iosurface_create(SimpleSpiceDisplay *ssd, int width, int height
                            EGL_BIND_TO_TEXTURE_TARGET_ANGLE,
                            &target) != EGL_TRUE) {
         error_report("spice_iosurface_create: eglGetConfigAttrib failed");
-        return 0;
+        goto gl_error;
     }
     if (target == EGL_TEXTURE_2D) {
         tex_target = GL_TEXTURE_2D;
@@ -855,7 +855,7 @@ static int spice_iosurface_create(SimpleSpiceDisplay *ssd, int width, int height
         tex_target = GL_TEXTURE_RECTANGLE_ANGLE;
     } else {
         error_report("spice_iosurface_create: unsupported texture target");
-        return 0;
+        goto gl_error;
     }
 
     const EGLint attribs[] = {
@@ -880,6 +880,8 @@ static int spice_iosurface_create(SimpleSpiceDisplay *ssd, int width, int height
 
     egl_fb_setup_new_tex_target(&ssd->iosurface_fb, width, height, tex_target);
 
+    eglBindTexImage(qemu_egl_display, ssd->esurface, EGL_BACK_BUFFER);
+
     return 1;
 gl_error:
     CFRelease(ssd->iosurface);
@@ -897,6 +899,8 @@ static void spice_iosurface_destroy(SimpleSpiceDisplay *ssd)
         return;
     }
 #if defined(CONFIG_ANGLE)
+    eglMakeCurrent(qemu_egl_display, ssd->esurface, ssd->esurface, spice_gl_ctx);
+    eglReleaseTexImage(qemu_egl_display, ssd->esurface, EGL_BACK_BUFFER);
     egl_fb_destroy(&ssd->iosurface_fb);
     qemu_egl_destroy_surface(ssd->esurface);
     ssd->esurface = EGL_NO_SURFACE;
@@ -963,20 +967,7 @@ static void spice_iosurface_blit(SimpleSpiceDisplay *ssd, GLuint src_texture, bo
 #if defined(CONFIG_ANGLE)
     eglMakeCurrent(qemu_egl_display, ssd->esurface, ssd->esurface, spice_gl_ctx);
     glBindTexture(ssd->iosurface_fb.texture_target, ssd->iosurface_fb.texture);
-    eglBindTexImage(qemu_egl_display, ssd->esurface, EGL_BACK_BUFFER);
     egl_texture_blit(ssd->gls, &ssd->iosurface_fb, &tmp_fb, flip, swap);
-#endif
-}
-
-static void spice_iosurface_flush(SimpleSpiceDisplay *ssd)
-{
-    if (!ssd->iosurface) {
-        return;
-    }
-
-#if defined(CONFIG_ANGLE)
-    eglMakeCurrent(qemu_egl_display, ssd->esurface, ssd->esurface, spice_gl_ctx);
-    eglReleaseTexImage(qemu_egl_display, ssd->esurface, EGL_BACK_BUFFER);
 #endif
 }
 
@@ -1043,9 +1034,6 @@ static void spice_gl_refresh(DisplayChangeListener *dcl)
     graphic_hw_update(dcl->con);
     if (ssd->gl_updates && ssd->have_surface) {
         qemu_spice_gl_block(ssd, true);
-#if defined(CONFIG_IOSURFACE)
-        spice_iosurface_flush(ssd);
-#endif
         glFlush();
         cookie = (uintptr_t)qxl_cookie_new(QXL_COOKIE_TYPE_GL_DRAW_DONE, 0);
         spice_qxl_gl_draw_async(&ssd->qxl, 0, 0,
@@ -1079,10 +1067,6 @@ static void spice_gl_switch(DisplayChangeListener *dcl,
     int width = 0, height = 0;
 
     if (ssd->ds) {
-#if defined(CONFIG_IOSURFACE)
-        // need to release texture from surface before destorying it
-        spice_iosurface_flush(ssd);
-#endif
         surface_gl_destroy_texture(ssd->gls, ssd->ds);
     }
     ssd->ds = new_surface;
@@ -1346,7 +1330,6 @@ static void qemu_spice_gl_update(DisplayChangeListener *dcl,
     GLuint tex_id = ssd->backing_borrow(ssd->backing_id, &y_0_top,
                                         NULL, NULL);
     spice_iosurface_blit(ssd, tex_id, !y_0_top, false);
-    spice_iosurface_flush(ssd);
     //TODO: cursor stuff
 #endif
 
