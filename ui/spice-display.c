@@ -966,7 +966,6 @@ static void spice_iosurface_blit(SimpleSpiceDisplay *ssd, GLuint src_texture, bo
 
 #if defined(CONFIG_ANGLE)
     eglMakeCurrent(qemu_egl_display, ssd->esurface, ssd->esurface, spice_gl_ctx);
-    glBindTexture(ssd->iosurface_fb.texture_target, ssd->iosurface_fb.texture);
     egl_texture_blit(ssd->gls, &ssd->iosurface_fb, &tmp_fb, flip, swap);
 #endif
 }
