@@ -26,6 +26,7 @@ meson_options_help() {
   printf "%s\n" '  --enable-fuzzing         build fuzzing targets'
   printf "%s\n" '  --enable-gcov            Enable coverage tracking.'
   printf "%s\n" '  --enable-gprof           QEMU profiling with gprof'
+  printf "%s\n" '  --enable-hvf-private     HVF private features (entitlements required)'
   printf "%s\n" '  --enable-lto             Use link time optimization'
   printf "%s\n" '  --enable-malloc=CHOICE   choose memory allocator to use [system] (choices:'
   printf "%s\n" '                           jemalloc/system/tcmalloc)'
@@ -289,6 +290,8 @@ _meson_option_parse() {
     --disable-hax) printf "%s" -Dhax=disabled ;;
     --enable-hvf) printf "%s" -Dhvf=enabled ;;
     --disable-hvf) printf "%s" -Dhvf=disabled ;;
+    --enable-hvf-private) printf "%s" -Dhvf_private=true ;;
+    --disable-hvf-private) printf "%s" -Dhvf_private=false ;;
     --iasl=*) quote_sh "-Diasl=$2" ;;
     --enable-iconv) printf "%s" -Diconv=enabled ;;
     --disable-iconv) printf "%s" -Diconv=disabled ;;

@@ -212,6 +212,11 @@ void hvf_kick_vcpu_thread(CPUState *cpu)
     cpus_kick_thread(cpu);
 }
 
+hv_return_t hvf_arch_vm_create(HVFState *s)
+{
+    return hv_vm_create(HV_VM_DEFAULT);
+}
+
 int hvf_arch_init(void)
 {
     return 0;

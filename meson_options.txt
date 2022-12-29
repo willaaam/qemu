@@ -72,6 +72,8 @@ option('whpx', type: 'feature', value: 'auto',
        description: 'WHPX acceleration support')
 option('hvf', type: 'feature', value: 'auto',
        description: 'HVF acceleration support')
+option('hvf_private', type: 'boolean', value: 'false',
+       description: 'HVF private features (entitlements required)')
 option('nvmm', type: 'feature', value: 'auto',
        description: 'NVMM acceleration support')
 option('xen', type: 'feature', value: 'auto',

@@ -17,6 +17,15 @@
 #include <Hypervisor/hv.h>
 #endif
 
+#if defined(CONFIG_HVF_PRIVATE) && defined(__aarch64__)
+extern hv_return_t _hv_vm_config_set_isa(hv_vm_config_t config, uint32_t isa);
+extern hv_return_t _hv_vcpu_get_actlr(hv_vcpu_t vcpu, uint64_t* value);
+extern hv_return_t _hv_vcpu_set_actlr(hv_vcpu_t vcpu, uint64_t value);
+
+#define HV_VM_CONFIG_ISA_PRIVATE (3)
+#define ACTLR_EL1_TSO_ENABLE_MASK ((1 << 1) | (1 << 9))
+#endif
+
 /* hvf_slot flags */
 #define HVF_SLOT_LOG (1 << 0)
 
@@ -45,6 +54,9 @@ struct HVFState {
 
     hvf_vcpu_caps *hvf_caps;
     uint64_t vtimer_offset;
+#if defined(CONFIG_HVF_PRIVATE) && defined(__aarch64__)
+    bool tso_mode;
+#endif
 };
 extern HVFState *hvf_state;
 
@@ -56,6 +68,7 @@ struct hvf_vcpu_state {
 };
 
 void assert_hvf_ok(hv_return_t ret);
+hv_return_t hvf_arch_vm_create(HVFState *s);
 int hvf_arch_init(void);
 int hvf_arch_init_vcpu(CPUState *cpu);
 void hvf_arch_vcpu_destroy(CPUState *cpu);

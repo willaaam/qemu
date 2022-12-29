@@ -57,12 +57,9 @@
 #include "sysemu/hvf_int.h"
 #include "sysemu/runstate.h"
 #include "qemu/guest-random.h"
+#include "hw/boards.h"
 
 HVFState *hvf_state;
-
-#ifdef __aarch64__
-#define HV_VM_DEFAULT NULL
-#endif
 
 /* Memory slots */
 
@@ -319,25 +316,44 @@ bool hvf_allowed;
 
 static int hvf_accel_init(MachineState *ms)
 {
-    int x;
     hv_return_t ret;
-    HVFState *s;
+    HVFState *s = HVF_STATE(ms->accelerator);
 
-    ret = hv_vm_create(HV_VM_DEFAULT);
+    ret = hvf_arch_vm_create(s);
     assert_hvf_ok(ret);
 
-    s = g_new0(HVFState, 1);
+    hvf_state = s;
+    memory_listener_register(&hvf_memory_listener, &address_space_memory);
+
+    return hvf_arch_init();
+}
+
+#if defined(CONFIG_HVF_PRIVATE) && defined(__aarch64__)
+
+static bool hvf_get_tso(Object *obj, Error **errp)
+{
+    HVFState *s = HVF_STATE(obj);
+    return s->tso_mode;
+}
+
+static void hvf_set_tso(Object *obj, bool value, Error **errp)
+{
+    HVFState *s = HVF_STATE(obj);
+    s->tso_mode = value;
+}
+
+#endif
+
+static void hvf_accel_instance_init(Object *obj)
+{
+    int x;
+    HVFState *s = HVF_STATE(obj);
 
     s->num_slots = ARRAY_SIZE(s->slots);
     for (x = 0; x < s->num_slots; ++x) {
         s->slots[x].size = 0;
         s->slots[x].slot_id = x;
     }
-
-    hvf_state = s;
-    memory_listener_register(&hvf_memory_listener, &address_space_memory);
-
-    return hvf_arch_init();
 }
 
 static void hvf_accel_class_init(ObjectClass *oc, void *data)
@@ -346,12 +362,21 @@ static void hvf_accel_class_init(ObjectClass *oc, void *data)
     ac->name = "HVF";
     ac->init_machine = hvf_accel_init;
     ac->allowed = &hvf_allowed;
+
+#if defined(CONFIG_HVF_PRIVATE) && defined(__aarch64__)
+    object_class_property_add_bool(oc, "tso",
+        hvf_get_tso, hvf_set_tso);
+    object_class_property_set_description(oc, "tso",
+        "Set on/off to enable/disable total store ordering mode");
+#endif
 }
 
 static const TypeInfo hvf_accel_type = {
     .name = TYPE_HVF_ACCEL,
     .parent = TYPE_ACCEL,
+    .instance_init = hvf_accel_instance_init,
     .class_init = hvf_accel_class_init,
+    .instance_size = sizeof(HVFState),
 };
 
 static void hvf_type_init(void)

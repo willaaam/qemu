@@ -440,6 +440,7 @@ if get_option('hvf').allowed()
                    required: get_option('hvf'))
   if hvf.found()
     accelerators += 'CONFIG_HVF'
+    config_host_data.set('CONFIG_HVF_PRIVATE', get_option('hvf_private'))
   endif
 endif
 if get_option('hax').allowed()

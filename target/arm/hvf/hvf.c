@@ -623,6 +623,18 @@ int hvf_arch_init_vcpu(CPUState *cpu)
                               &arm_cpu->isar.id_aa64mmfr0);
     assert_hvf_ok(ret);
 
+#if defined(CONFIG_HVF_PRIVATE)
+    /* enable TSO mode */
+    if (hvf_state->tso_mode) {
+        uint64_t actlr;
+        ret = _hv_vcpu_get_actlr(cpu->hvf->fd, &actlr);
+        assert_hvf_ok(ret);
+        actlr |= ACTLR_EL1_TSO_ENABLE_MASK;
+        ret = _hv_vcpu_set_actlr(cpu->hvf->fd, actlr);
+        assert_hvf_ok(ret);
+    }
+#endif
+
     return 0;
 }
 
@@ -1341,6 +1353,22 @@ static void hvf_vm_state_change(void *opaque, bool running, RunState state)
         /* Remember vtimer value on every pause */
         s->vtimer_val = hvf_vtimer_val_raw();
     }
+}
+
+hv_return_t hvf_arch_vm_create(HVFState *s)
+{
+#if defined(CONFIG_HVF_PRIVATE)
+    hv_return_t ret;
+    hv_vm_config_t config = hv_vm_config_create();
+    if (s->tso_mode) {
+        _hv_vm_config_set_isa(config, HV_VM_CONFIG_ISA_PRIVATE);
+    }
+    ret = hv_vm_create(config);
+    os_release(config);
+    return ret;
+#else
+    return hv_vm_create(NULL);
+#endif
 }
 
 int hvf_arch_init(void)
