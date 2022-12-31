@@ -31,7 +31,9 @@
 # define TARGET_PAGE_BITS_VARY
 # define TARGET_PAGE_BITS_MIN  10
 
+#ifndef CONFIG_TCG_THREADED_INTERPRETER
 # define TARGET_TB_PCREL 1
+#endif
 
 /*
  * Cache the attrs and shareability fields from the page table entry.
