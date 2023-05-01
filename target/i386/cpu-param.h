@@ -23,10 +23,5 @@
 # define TARGET_VIRT_ADDR_SPACE_BITS  32
 #endif
 #define TARGET_PAGE_BITS 12
-#define NB_MMU_MODES 5
-
-#if !defined(CONFIG_USER_ONLY) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
-# define TARGET_TB_PCREL 1
-#endif
 
 #endif

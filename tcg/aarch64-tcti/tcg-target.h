@@ -56,9 +56,6 @@
 // weird psuedo-native bytecode. We'll indicate that we're intepreted.
 #define TCG_TARGET_INTERPRETER 1
 
-// Specify we'll handle direct jumps.
-#define TCG_TARGET_HAS_direct_jump      1
-
 //
 // Supported optional scalar instructions.
 //
@@ -240,6 +237,10 @@ typedef enum {
 // Specify the shape of the stack our runtime will use.
 #define TCG_TARGET_CALL_STACK_OFFSET    0
 #define TCG_TARGET_STACK_ALIGN          16
+#define TCG_TARGET_CALL_ARG_I32         TCG_CALL_ARG_NORMAL
+#define TCG_TARGET_CALL_ARG_I64         TCG_CALL_ARG_NORMAL
+#define TCG_TARGET_CALL_ARG_I128        TCG_CALL_ARG_NORMAL
+#define TCG_TARGET_CALL_RET_I128        TCG_CALL_RET_NORMAL
 
 // We're interpreted, so we'll use our own code to run TB_EXEC.
 #define HAVE_TCG_QEMU_TB_EXEC
@@ -248,8 +249,6 @@ typedef enum {
 #define TCG_TARGET_DEFAULT_MO  (0)
 
 void tci_disas(uint8_t opc);
-
-void tb_target_set_jmp_target(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 
 
 #endif /* TCG_TARGET_H */

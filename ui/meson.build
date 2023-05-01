@@ -14,6 +14,8 @@ softmmu_ss.add(files(
   'kbd-state.c',
   'keymaps.c',
   'qemu-pixman.c',
+  'ui-hmp-cmds.c',
+  'ui-qmp-cmds.c',
   'util.c',
 ))
 if dbus_display
@@ -26,9 +28,7 @@ softmmu_ss.add(when: 'CONFIG_LINUX', if_true: files(
   'input-linux.c',
   'udmabuf.c',
 ))
-softmmu_ss.add(when: cocoa,
-               if_true: files('cocoa/main.m', 'cocoa/pasteboard_type_owner.m',
-                              'cocoa/view.m', 'cocoa/app_controller.m'))
+softmmu_ss.add(when: cocoa, if_true: files('cocoa.m'))
 
 vnc_ss = ss.source_set()
 vnc_ss.add(files(
@@ -83,7 +83,9 @@ if dbus_display
                                           '--interface-prefix', 'org.qemu.',
                                           '--c-namespace', 'QemuDBus',
                                           '--generate-c-code', '@BASENAME@'])
-  dbus_ss.add(when: [gio, pixman, opengl, gbm],
+  dbus_display1_lib = static_library('dbus-display1', dbus_display1, dependencies: gio)
+  dbus_display1_dep = declare_dependency(link_with: dbus_display1_lib, include_directories: include_directories('.'))
+  dbus_ss.add(when: [gio, pixman, dbus_display1_dep],
               if_true: [files(
                 'dbus-chardev.c',
                 'dbus-clipboard.c',
@@ -91,7 +93,7 @@ if dbus_display
                 'dbus-error.c',
                 'dbus-listener.c',
                 'dbus.c',
-              ), dbus_display1])
+              ), opengl, gbm])
   ui_modules += {'dbus' : dbus_ss}
 endif
 

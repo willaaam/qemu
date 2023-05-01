@@ -26,6 +26,8 @@ typedef struct egl_fb {
     QemuDmaBuf *dmabuf;
 } egl_fb;
 
+#define EGL_FB_INIT { 0, }
+
 void egl_fb_destroy(egl_fb *fb);
 void egl_fb_setup_default(egl_fb *fb, int width, int height);
 void egl_fb_setup_for_tex_target(egl_fb *fb, int width, int height,
@@ -81,5 +83,7 @@ int qemu_egl_init_dpy_angle(DisplayGLMode mode);
 
 EGLContext qemu_egl_init_ctx(void);
 bool qemu_egl_has_dmabuf(void);
+
+bool egl_init(const char *rendernode, DisplayGLMode mode, Error **errp);
 
 #endif /* EGL_HELPERS_H */

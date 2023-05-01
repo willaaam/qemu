@@ -242,10 +242,6 @@ static const int tcg_target_reg_alloc_order[] = {
     TCG_REG_V28, TCG_REG_V29, TCG_REG_V30, TCG_REG_V31,
 };
 
-#if MAX_OPC_PARAM_IARGS != 7
-# error Fix needed, number of supported input arguments changed!
-#endif
-
 static const int tcg_target_call_iarg_regs[] = {
     TCG_REG_R0,
     TCG_REG_R1,
@@ -255,9 +251,12 @@ static const int tcg_target_call_iarg_regs[] = {
     TCG_REG_R5,
 };
 
-static const int tcg_target_call_oarg_regs[] = {
-    TCG_REG_R0,
-};
+static TCGReg tcg_target_call_oarg_reg(TCGCallReturnKind kind, int slot)
+{
+    tcg_debug_assert(kind == TCG_CALL_RET_NORMAL);
+    tcg_debug_assert(slot >= 0 && slot < 128 / TCG_TARGET_REG_BITS);
+    return TCG_REG_R0 + slot;
+}
 
 #ifdef CONFIG_DEBUG_TCG
 static const char *const tcg_target_reg_names[TCG_TARGET_GP_REGS] = {
@@ -408,10 +407,12 @@ static void tcg_out_immediate(TCGContext *s, tcg_target_ulong v)
     }
 }
 
-void tb_target_set_jmp_target(uintptr_t tc_ptr, uintptr_t jmp_rx, uintptr_t jmp_rw, uintptr_t addr)
+void tb_target_set_jmp_target(const TranslationBlock *tb, int n,
+                              uintptr_t jmp_rx, uintptr_t jmp_rw)
 {
     /* Get a pointer to our immediate, which exists after a single pointer. */
     uintptr_t immediate_addr = jmp_rw;
+    uintptr_t addr = tb->jmp_target_addr[n];
 
     /* Patch it to be match our target address. */
     qatomic_set((uint64_t *)immediate_addr, addr);
@@ -707,13 +708,21 @@ static void tcg_out_movi(TCGContext *s, TCGType type, TCGReg t0, tcg_target_long
     }
 }
 
+static void tcg_out_addi_ptr(TCGContext *s, TCGReg rd, TCGReg rs,
+                              tcg_target_long imm)
+{
+    /* This function is only used for passing structs by reference. */
+    g_assert_not_reached();
+}
+
 /**
  * Generate a CALL.
  */
-static inline void tcg_out_call(TCGContext *s, const tcg_insn_unit *arg)
+static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
+                         const TCGHelperInfo *info)
 {
     tcg_out_gadget(s, gadget_call);
-    tcg_out64(s, (uintptr_t)arg);
+    tcg_out64(s, (uintptr_t)func);
 }
 
 /**
@@ -730,6 +739,29 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
     }
 }
 
+static void tcg_out_exit_tb(TCGContext *s, uintptr_t arg)
+{
+    // Emit a simple gadget with a known return code.
+    tcg_out_imm64_gadget(s, gadget_exit_tb, arg);
+}
+
+static void tcg_out_goto_tb(TCGContext *s, int which)
+{
+    // If we're using a direct jump, we'll emit a "relocation" that can be usd
+    // to patch our gadget stream with the target address, later.
+
+    // Emit our gadget.
+    tcg_out_gadget(s, gadget_br);
+
+    // Place our current instruction into our "relocation table", so it can
+    // be patched once we know where the branch will target...
+    s->gen_tb->jmp_insn_offset[which] = tcg_current_code_size(s);
+
+    // ... and emit our relocation.
+    tcg_out64(s, which);
+
+    set_jmp_reset_offset(s, which);
+}
 
 /**
  * Generate every other operation.
@@ -738,36 +770,6 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
 void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *const_args)
 {
     switch (opc) {
-
-    // Exit translation, and return back to QEMU.
-    case INDEX_op_exit_tb:
-        // Emit a simple gadget with a known return code.
-        tcg_out_imm64_gadget(s, gadget_exit_tb, args[0]);
-        break;
-
-    // Jump to a translation block.
-    case INDEX_op_goto_tb:
-
-        // If we're using a direct jump, we'll emit a "relocation" that can be usd
-        // to patch our gadget stream with the target address, later.
-        if (s->tb_jmp_insn_offset) {
-            // Emit our gadget.
-            tcg_out_gadget(s, gadget_br);
-
-            // Place our current instruction into our "relocation table", so it can
-            // be patched once we know where the branch will target...
-            s->tb_jmp_insn_offset[args[0]] = tcg_current_code_size(s);
-
-            // ... and emit our relocation.
-            tcg_out64(s, args[0]);
-
-
-        } else {
-            /* Indirect jump method. */
-            TODO();
-        }
-        set_jmp_reset_offset(s, args[0]);
-        break;
 
     // Simple branch.
     case INDEX_op_br:
@@ -1362,6 +1364,8 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
     case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
     case INDEX_op_mov_i64:
     case INDEX_op_call:     /* Always emitted via tcg_out_call.  */
+    case INDEX_op_exit_tb:  /* Always emitted via tcg_out_exit_tb.  */
+    case INDEX_op_goto_tb:  /* Always emitted via tcg_out_goto_tb.  */
     default:
         tcg_abort();
     }

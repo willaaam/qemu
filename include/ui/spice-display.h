@@ -33,11 +33,9 @@
 #endif
 
 #if defined(CONFIG_OPENGL)
-# if SPICE_SERVER_VERSION >= 0x000d01 /* release 0.13.1 */
 #  define HAVE_SPICE_GL 1
 #  include "ui/egl-helpers.h"
 #  include "ui/egl-context.h"
-# endif
 #endif
 
 #define NUM_MEMSLOTS 8
